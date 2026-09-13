@@ -53,7 +53,7 @@ A worker stopped by either timeout is not treated as a failed repair: its edits 
 | `failure_review` | false | on a failed trusted check or terminal worker error, ask one advisory checker whether to retry or block |
 | `failure_review_provider` | task's provider | provider for the failure checker; it must be `codex`, `claude`, or `antigravity` |
 | `failure_review_model` | none | optional model id for the failure checker |
-| `provider_token_budgets` | none | e.g. `{"codex": 100000}` — local admission cap per provider, counted across this plan's completed responses |
+| `provider_token_budgets` | none | e.g. `{"codex": 8000000}` — local admission cap per provider, counted across this plan's completed responses; omit it when no local ceiling is intended |
 | `review_provider` | `claude` | which CLI performs optional self-review (see below), only used if `--review` is passed |
 | `review_model` | none | model id for the review call, only used if `--review` is passed |
 
