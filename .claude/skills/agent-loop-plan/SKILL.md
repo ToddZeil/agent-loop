@@ -11,7 +11,7 @@ Plans are JSON files consumed by `Engine.tick` (`loop/engine.py`) and validated 
 
 The `loop` module itself doesn't need to be inside the target repo — invocation always takes `--repo <path>`. It's common to be working from the agent-loop checkout (or any other directory) while writing a plan meant for a separate target repo. When that's the case:
 
-1. Ask for (or confirm) the target repo's absolute path if it isn't already clear from context.
+1. Obtain the user's explicit confirmation of the target repo's absolute path before creating a branch, writing a plan, or starting a run. Do not infer it from the current directory, a sibling directory, existing plans, or prior work; if the latest request does not name the target, ask one concise confirmation question and wait.
 2. Read that repo's actual structure before writing `files`/`check` paths — don't guess filenames. List its directory tree and open any files the new task should extend or match conventions with.
 3. Verify the target repo is a git repo, clean, and has a commit (`git -C <target-repo> status --porcelain` should be empty).
 4. Write the plan JSON **into the target repo** (e.g. `<target-repo>/agent-loop-plans/<id>.json` or its root) — not into agent-loop's own directory — so it travels with the code it describes.
