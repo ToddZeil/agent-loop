@@ -8,9 +8,9 @@
   "failure_review": true,
   "failure_review_provider": "claude",
   "provider_token_budgets": {
-    "codex": 100000,
-    "claude": 100000,
-    "antigravity": 100000
+    "codex": 8000000,
+    "claude": 8000000,
+    "antigravity": 8000000
   },
   "tasks": [
     {
