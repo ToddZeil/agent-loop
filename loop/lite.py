@@ -32,6 +32,7 @@ from .storage import atomic_json
 
 PROVIDERS = ("claude", "codex", "antigravity")
 CLI = {"claude": "claude", "codex": "codex", "antigravity": "agy"}
+FAILURE_OUTCOMES = ("failed", "gate_failed", "worker_error")
 DEFAULTS = {
     "supervisors": ["claude", "codex", "antigravity"],
     "workers": ["claude", "codex", "antigravity"],
@@ -113,7 +114,10 @@ these as failures to re-dispatch with specific feedback:
 - unchanged dates or text passed off as new work
 The keeper may also run its own GATES and an independent AUDIT by another model. An
 "audit_failed" or "gate_failed" outcome means the change was not committed; its problems are
-in the result.
+in the result. A summary may carry "failure_class" (missing_dependency means fix the
+environment, not the code) and "unsupported_claims": things the worker says it did that no
+changed file shows. The class may come from a small local model and the claims from simple
+rules: check both before acting on them.
 
 Keep your notes current: the keeper may restart you in a fresh session, or on a different
 model, at any time. Your `note` is the only memory that survives besides the plan and results.
@@ -402,6 +406,10 @@ class LiteRun:
                 lines.append("  - blocker: " + summary["blocker"])
             if summary.get("suggested_fix_command"):
                 lines.append("  - hint: " + summary["suggested_fix_command"])
+            if summary.get("failure_class"):
+                lines.append("  - failure class: " + summary["failure_class"])
+            for claim in summary.get("unsupported_claims", []):
+                lines.append("  - worker claim no changed file shows (advisory): " + claim)
             for bullet in summary.get("progress", []):
                 lines.append("  - " + bullet)
         text = "\n".join(lines) + "\n"
@@ -952,14 +960,24 @@ class LiteRun:
         task["history"] = (task.get("history") or []) + [
             "%s:%s/%s:%s" % (entry["tier"], provider, model or "default", outcome)]
         self.save("plan.json", plan)
+        claims = (keeper.unsupported_claims(result.response, changed)
+                  if result.status == "ok" and outcome != "provider_unavailable" else [])
         return self.report(state, task, provider, outcome,
                            (check_output + "\n\nWORKER SAID:\n" + worker_text).strip(),
                            {"worker_status": result.status, "changed_files": changed[:40],
                             "sha": task.get("sha") if outcome == "passed" else None,
-                            **verification})
+                            **verification}, claims=claims)
 
-    def report(self, state, task, provider, outcome, log_tail, extra):
+    def report(self, state, task, provider, outcome, log_tail, extra, claims=()):
         summary, source = self.scribe.summarise(task["id"], outcome, log_tail)
+        notes = {}
+        if outcome in FAILURE_OUTCOMES:
+            # Classify the check's evidence; the worker's own account can name errors it fixed.
+            evidence = log_tail.split("WORKER SAID:")[0].strip() or log_tail
+            summary["failure_class"], notes["failure_class"] = self.scribe.classify(evidence)
+        if claims:
+            summary["unsupported_claims"] = list(claims)
+            notes["claims"] = len(claims)
         record = {"task": task["id"], "provider": provider, "outcome": outcome,
                   "summary": summary, **extra, "output_tail": tail(log_tail, 40, 3000)}
         state["pending"].append(record)
@@ -968,7 +986,7 @@ class LiteRun:
                                                      ("task", "provider", "outcome", "summary")}])[-30:]
         self.save("handoff.json", handoff)
         self.render_handoff()
-        self.journal("result", task=task["id"], provider=provider, outcome=outcome, scribe=source)
+        self.journal("result", task=task["id"], provider=provider, outcome=outcome, scribe=source, **notes)
         return record
 
     def accept(self, state, action):

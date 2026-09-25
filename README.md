@@ -16,6 +16,18 @@ python3 -m loop codex-quota
 python3 -m loop usage
 ```
 
+### Local dashboard
+
+To view current runs, agents, providers, and recent events in a browser:
+
+```sh
+python3 dashboard_server.py
+```
+
+Then open <http://127.0.0.1:8765>. The dashboard reads `.agent-loop/state.sqlite`
+as read-only state and refreshes every five seconds. To watch another checkout,
+pass its path: `python3 dashboard_server.py --repo /path/to/repository`.
+
 The repository must have an initial commit and a clean working tree before a new milestone starts. The supplied plan asks three providers to implement a tiny Python `clamp` function. Each implementation must pass 11 independent acceptance cases before the supervisor commits it. A final pass checks the entire milestone.
 
 Workers use normal read, search, edit, and command tools inside the isolated managed worktree. Delegation and subagent tools remain disabled. The supervisor verifies that `HEAD` did not move, rejects changes outside each task's `files` allowlist, blocks suspicious truncation of existing files, runs the trusted check, and commits only accepted changes. Failed and interrupted attempts are rolled back before retrying.
@@ -112,7 +124,7 @@ There are three layers:
   - **Reset** the session above `--reset-at-tokens` (default 120k).
   - **Rotate** after 4 stagnant turns.
 
-The local Ollama model (`--keeper-model`, default `qwen2.5:7b`) only compresses worker results into handoff notes, with a deterministic fallback when Ollama is down. In testing, qwen2.5:7b chose the right action only 9 times out of 18, but extracted blockers and fix commands reliably.
+The local Ollama model (`--keeper-model`, default `qwen2.5-coder:7b`) compresses worker results into handoff notes, with a deterministic fallback when Ollama is down. In testing, qwen2.5:7b chose the right action only 9 times out of 18, but extracted blockers and fix commands reliably. When the diagnosis regexes cannot classify a failure, it also names a failure class for the supervisor (12 of 14 right in `scripts/bench_local.py`, against 7 for the regexes alone). Separately, the keeper flags sentences where a worker says it added tests, docs or a migration, or changed a file, that no changed file backs up; that check is plain rules, because the model was unreliable at it on real-length replies.
 
 Workers can only use models from a tiered catalog, and the supervisor picks a tier or an exact model for each dispatch. You can replace the catalog with `--catalog`, a JSON list of `{provider, tier, model, effort?}`.
 

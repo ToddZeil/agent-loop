@@ -6,7 +6,8 @@ supervisors and reset sessions for context limits that had not been reached),
 and asked to judge a failing log it called it "passed". Asked to *extract* a
 blocker, a fix command and progress bullets from the same log it was right
 every time. So decisions here are plain rules, and the local model only writes
-the short result summaries that make a context reset or provider switch cheap.
+the short result summaries that make a context reset or provider switch cheap,
+plus an advisory failure class where the diagnosis regexes find none.
 Every model output has a deterministic fallback; the loop never depends on it.
 """
 import json
@@ -17,7 +18,9 @@ import time
 import urllib.error
 import urllib.request
 
-DEFAULT_KEEPER_MODEL = "qwen2.5:7b"
+from . import diagnosis
+
+DEFAULT_KEEPER_MODEL = "qwen2.5-coder:7b"
 OLLAMA_URL = "http://localhost:11434"
 REMINDER = ("Keeper reminder: you are the supervisor. Do not edit files, run builds or "
             "write the implementation into dispatch prompts. Describe the change and "
@@ -202,27 +205,171 @@ def fallback_summary(log_tail):
             "progress": [], "handoff": " | ".join(hints) or " | ".join(lines[-3:])[:600]}
 
 
+CLEAN_OUTCOMES = ("passed", "accepted")
+SUCCESS_CLAIM = re.compile(
+    r"(?i)\ball (the )?tests (now )?pass(ed)?\b|\btask (is |was |has been )?(now )?"
+    r"(complete|completed|done|finished)\b|\bcompleted successfully\b|\bnothing is blocking\b"
+    r"|\bno (remaining )?blockers?\b")
+
+
+def logged_commands(log_tail):
+    return {match.group(0).strip("`║ ") for line in str(log_tail or "").splitlines()
+            for match in [COMMAND_PATTERN.search(line)] if match}
+
+
+def drop_success_claims(text):
+    """``text`` without the sentences that claim success, which a failed outcome disproves."""
+    sentences = re.split(r"(?<=[.!?])\s+", str(text or ""))
+    return " ".join(sentence for sentence in sentences if not SUCCESS_CLAIM.search(sentence)).strip()
+
+
+def guard_summary(value, outcome, log_tail):
+    """Constrain a model summary by what the caller knows for certain.
+
+    Log text is untrusted: a worker, or a file it printed, can tell the model to
+    blank the blocker or to suggest a command. The outcome comes from exit codes,
+    so a failed run never keeps an empty blocker or a sentence claiming success,
+    and only an install-style command printed in the log survives as a hint.
+    """
+    # Models wrap the command in prose ("Run `npx playwright install` to ..."); keep
+    # the longest logged command it mentions rather than demanding the bare command.
+    suggested = str(value.get("suggested_fix_command") or "")
+    mentioned = [command for command in logged_commands(log_tail) if command in suggested]
+    value["suggested_fix_command"] = max(mentioned, key=len) if mentioned else None
+    if outcome not in CLEAN_OUTCOMES:
+        if not str(value.get("blocker") or "").strip():
+            value["blocker"] = (fallback_summary(log_tail)["blocker"]
+                                or outcome + ": no error line recognised in the log; read the log tail")
+        handoff = drop_success_claims(value.get("handoff"))
+        if handoff != str(value.get("handoff") or "").strip():
+            value["handoff"] = (outcome + " by exit code; the worker's claim of success was removed. "
+                                + (handoff or fallback_summary(log_tail)["handoff"]))[:800]
+        value["progress"] = [item for item in value.get("progress") or [] if not SUCCESS_CLAIM.search(item)]
+    return value
+
+
+INJECTION_PATTERN = re.compile(
+    r"(?i)ignore (all )?(previous|prior|above) instructions|note to (the )?(summari[sz]er|assistant|ai)\b"
+    r"|\b(ai|llm) (assistant|agent)s? (reading|who)|</?system>"
+    r"|\bset (the )?(blocker|suggested_fix_command) (to|as)\b|\bleave (the )?blocker (empty|null|blank)\b")
+INJECTION_NOTE = "[log contained instructions aimed at the summariser; summarised without the model] "
+
+
+def sanitised_fallback(outcome, log_tail):
+    """Deterministic summary of a log whose instruction-like lines are removed."""
+    clean = "\n".join(line for line in str(log_tail or "").splitlines()
+                      if not INJECTION_PATTERN.search(line))
+    value = guard_summary(fallback_summary(clean), outcome, clean)
+    if INJECTION_PATTERN.search(str(log_tail or "")):
+        value["handoff"] = INJECTION_NOTE + value["handoff"]
+    return value
+
+
+CLASSIFY_SCHEMA = {"type": "object", "properties": {"class": {"type": "string", "enum": [
+    diagnosis.MISSING_DEPENDENCY, diagnosis.TIMEOUT, diagnosis.ASSERTION, diagnosis.SYNTAX,
+    diagnosis.PERMISSION, diagnosis.UNKNOWN]}}, "required": ["class"]}
+CLASSIFY_SYSTEM = (
+    "Classify one failure diagnostic from a coding task into exactly one class:\n"
+    "missing_dependency: a package, module, crate or command is not installed.\n"
+    "timeout: an operation ran out of time or a connection timed out.\n"
+    "assertion: a test ran and an expected value did not match.\n"
+    "syntax: the code could not be parsed or compiled because of its syntax.\n"
+    "permission: the OS refused access.\n"
+    "unknown: anything else, including missing data files, crashes and killed processes.\n"
+    "Judge the actual error, not words that appear in test or file names.")
+
+# Worker claims are checked by rule, not by the model. On a realistic multi-paragraph
+# reply qwen2.5-coder:7b flagged follow-up notes and edits inside changed files, and
+# missed real false claims, differently with each prompt wording.
+CHANGE_VERB = re.compile(r"(?i)\b(add(ed)?|creat(ed|e)|wr(o|i)te|written|updat(ed|e)|chang(ed|e)|"
+                         r"modif(ied|y)|document(ed)?|implement(ed)?|fix(ed)?|mov(ed|e)|renam(ed|e)|"
+                         r"delet(ed|e)|remov(ed|e)|migrat\w*|cover(ed)?|extend(ed)?|refactor(ed)?)\b")
+# Adding or documenting an artifact needs a file of that kind; fixing a test does not.
+ARTIFACT_VERB = re.compile(r"(?i)\b(add(ed)?|creat(ed|e)|wr(o|i)te|written|document(ed)?|"
+                           r"cover(ed)?|updat(ed|e)|extend(ed)?)\b")
+NOT_A_CLAIM = re.compile(r"(?i)\b(not|never|no longer|may|might|could|should|would|worth|"
+                         r"follow-?up|todo|later)\b|n't\b")
+PATH_TOKEN = re.compile(r"(?<![\w/.-])[\w./-]*\.(?:py|ts|tsx|js|jsx|mjs|md|rst|json|ya?ml|toml|css|"
+                        r"scss|html|go|rs|rb|java|kt|swift|sql|sh)\b")
+ARTIFACTS = (
+    ("tests", re.compile(r"(?i)\b(unit |regression |integration )?(tests?|specs?)\b"),
+     re.compile(r"(?i)(^|/)(tests?|specs?|__tests__)/|[._-](test|spec)s?\.|(^|/)test_")),
+    ("docs", re.compile(r"(?i)\b(docs?|documentation|readme|changelog)\b|\bdocumented\b"),
+     re.compile(r"(?i)\.(md|rst|txt|adoc)$|(^|/)docs?/")),
+    ("migration", re.compile(r"(?i)\bmigrations?\b"), re.compile(r"(?i)migrat")),
+)
+
+
+def unsupported_claims(said, files):
+    """Sentences where the worker says it changed something no changed file shows.
+
+    A sentence counts when it uses a change verb and is not negated or hedged
+    ("did not", "may be worth", "follow-up"). It is unsupported when it names a
+    file that did not change, or says it added tests, docs or a migration and no
+    changed file is of that kind. Advisory: the supervisor decides what it means.
+    """
+    changed = [name.strip("./") for name in files]
+    flagged = []
+    for sentence in re.split(r"(?<=[.!?])\s+", " ".join(str(said or "").split())):
+        if not CHANGE_VERB.search(sentence) or NOT_A_CLAIM.search(sentence):
+            continue
+        paths = [path.strip("./") for path in PATH_TOKEN.findall(sentence)]
+        missing = [path for path in paths
+                   if not any(name == path or name.endswith("/" + path) for name in changed)]
+        kinds = [kind for kind, mention, pattern in ARTIFACTS
+                 if ARTIFACT_VERB.search(sentence) and mention.search(sentence)
+                 and not any(pattern.search(name) for name in changed)]
+        if missing or kinds:
+            flagged.append(sentence[:240])
+    return flagged[:5]
+
 class Scribe:
-    """Compresses worker results with the local model, or deterministically."""
+    """Compresses worker results with the local model, or deterministically.
+
+    It also names a failure class where the regexes in diagnosis.py find none,
+    as an advisory note for the supervisor; it feeds no keeper decision.
+    """
 
     def __init__(self, client=None):
         self.client = client
 
+    def ask(self, system, user, schema):
+        """The model's JSON reply, or None when there is no model or it fails."""
+        if self.client is None:
+            return None
+        try:
+            if self.client.ensure():
+                value = self.client.chat(system, user, schema)
+                return value if isinstance(value, dict) else None
+        except (OSError, ValueError, KeyError, TypeError, urllib.error.URLError):
+            pass
+        return None
+
     def summarise(self, task_id, outcome, log_tail):
         """Returns (summary, source). ``outcome`` is decided by the caller, never here."""
         tail = str(log_tail or "")[-6000:]
-        if self.client is not None:
-            try:
-                if self.client.ensure():
-                    value = self.client.chat(
-                        SUMMARY_SYSTEM,
-                        "TASK: " + task_id + "\nOUTCOME (from exit codes): " + outcome
-                        + "\nLOG:\n" + tail, SUMMARY_SCHEMA)
-                    if (isinstance(value, dict) and isinstance(value.get("handoff"), str)
-                            and isinstance(value.get("progress"), list)):
-                        value["progress"] = [str(item)[:240] for item in value["progress"][:4]]
-                        value["handoff"] = value["handoff"][:800]
-                        return value, "local-model"
-            except (OSError, ValueError, KeyError, TypeError, urllib.error.URLError):
-                pass
-        return fallback_summary(tail), "fallback"
+        if INJECTION_PATTERN.search(tail):
+            return sanitised_fallback(outcome, tail), "fallback"
+        value = self.ask(SUMMARY_SYSTEM, "TASK: " + task_id + "\nOUTCOME (from exit codes): "
+                         + outcome + "\nLOG:\n" + tail, SUMMARY_SCHEMA)
+        if value and isinstance(value.get("handoff"), str) and isinstance(value.get("progress"), list):
+            value["progress"] = [str(item)[:240] for item in value["progress"][:4]]
+            value["handoff"] = value["handoff"][:800]
+            return guard_summary(value, outcome, tail), "local-model"
+        return sanitised_fallback(outcome, tail), "fallback"
+
+    def classify(self, text):
+        """(class, source): diagnosis.classify, asking the model only when it says unknown.
+
+        Measured on 14 diagnostics the regexes alone got 50% right; adding
+        qwen2.5-coder:7b for their unknowns got 86%. The regex answer is kept
+        whenever it has one, so engine fingerprints and this note agree.
+        """
+        found = diagnosis.classify(text)
+        tail = str(text or "")[-3000:]
+        if found != diagnosis.UNKNOWN or not tail.strip() or INJECTION_PATTERN.search(tail):
+            return found, "regex"
+        name = (self.ask(CLASSIFY_SYSTEM, "DIAGNOSTIC:\n" + tail, CLASSIFY_SCHEMA) or {}).get("class")
+        if name in CLASSIFY_SCHEMA["properties"]["class"]["enum"]:
+            return name, "local-model"
+        return found, "regex"
