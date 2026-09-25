@@ -30,6 +30,14 @@ def _stop_group(proc):
     try:
         proc.wait(timeout=3)
     except subprocess.TimeoutExpired:
+        pass
+    # The leader may exit promptly while a child ignores TERM. Reap the whole
+    # process group before the workspace can be handed to another worker.
+    try:
+        os.killpg(proc.pid, 0)
+    except ProcessLookupError:
+        return
+    else:
         try:
             os.killpg(proc.pid, signal.SIGKILL)
         except ProcessLookupError:
@@ -38,7 +46,7 @@ def _stop_group(proc):
 
 
 def run_process(argv, cwd, timeout=180, stdin=None, idle_timeout=None, activity=None,
-                tee=None):
+                tee=None, pass_fds=(), on_spawn=None):
     """Bound the whole process group; never interpolate prompts into a shell.
 
     With ``idle_timeout``, a process that keeps producing output is left running
@@ -48,11 +56,13 @@ def run_process(argv, cwd, timeout=180, stdin=None, idle_timeout=None, activity=
     ``(stdout_path, stderr_path)`` pair appended to as output arrives.
     """
     if idle_timeout is None and tee is None:
-        proc = subprocess.Popen(argv, cwd=cwd,
+        proc = subprocess.Popen(argv, cwd=cwd, pass_fds=pass_fds,
                                 stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 text=True, start_new_session=True)
         try:
+            if on_spawn:
+                on_spawn(proc)
             out, err = proc.communicate(stdin, timeout=timeout)
             return proc.returncode, out, err
         except (subprocess.TimeoutExpired, KeyboardInterrupt) as exc:
@@ -65,11 +75,20 @@ def run_process(argv, cwd, timeout=180, stdin=None, idle_timeout=None, activity=
             if isinstance(exc, KeyboardInterrupt):
                 raise
             return 124, out, err + "\nworker timeout"
+        except BaseException:
+            _stop_group(proc)
+            raise
 
-    proc = subprocess.Popen(argv, cwd=cwd,
+    proc = subprocess.Popen(argv, cwd=cwd, pass_fds=pass_fds,
                             stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             start_new_session=True)
+    try:
+        if on_spawn:
+            on_spawn(proc)
+    except BaseException:
+        _stop_group(proc)
+        raise
     if stdin is not None:
         try:
             proc.stdin.write(stdin.encode())
@@ -80,12 +99,27 @@ def run_process(argv, cwd, timeout=180, stdin=None, idle_timeout=None, activity=
     chunks = {proc.stdout: [], proc.stderr: []}
     sinks = {}
     if tee:
-        sinks = {proc.stdout: open(tee[0], "ab"), proc.stderr: open(tee[1], "ab")}
-    sel = selectors.DefaultSelector()
-    sel.register(proc.stdout, selectors.EVENT_READ)
-    sel.register(proc.stderr, selectors.EVENT_READ)
-    start = last_output = time.monotonic()
-    seen = activity() if activity else None
+        try:
+            for stream, path, device, fd in ((proc.stdout, tee[0], "/dev/stdout", 1),
+                                             (proc.stderr, tee[1], "/dev/stderr", 2)):
+                sinks[stream] = (os.fdopen(os.dup(fd), "ab") if str(path) == device
+                                 else open(path, "ab"))
+        except BaseException:
+            _stop_group(proc)
+            for sink in sinks.values():
+                sink.close()
+            raise
+    try:
+        sel = selectors.DefaultSelector()
+        sel.register(proc.stdout, selectors.EVENT_READ)
+        sel.register(proc.stderr, selectors.EVENT_READ)
+        start = last_output = time.monotonic()
+        seen = activity() if activity else None
+    except BaseException:
+        _stop_group(proc)
+        for sink in sinks.values():
+            sink.close()
+        raise
     reason = ""
     try:
         while sel.get_map():
@@ -113,6 +147,9 @@ def run_process(argv, cwd, timeout=180, stdin=None, idle_timeout=None, activity=
                 else:
                     sel.unregister(key.fileobj)
     except KeyboardInterrupt:
+        _stop_group(proc)
+        raise
+    except BaseException:
         _stop_group(proc)
         raise
     finally:
@@ -217,6 +254,31 @@ def command(provider, prompt, model=None, effort=None, worker=True, sandbox=Fals
     elif model and provider != "codex":
         prompt_index = argv.index(prompt)
         argv[prompt_index:prompt_index] = ["--model", model]
+    return argv
+
+
+def continuing_worker_command(provider, prompt, model=None, effort=None,
+                              session=None, workspace=None):
+    """A worktree-scoped worker turn with provider conversation persistence.
+
+    These resume flags are supported by the installed CLI versions. A failed
+    resume is classified by the keeper and retried as a fresh handoff.
+    """
+    argv = command(provider, prompt, model, effort, scope="worktree", workspace=workspace)
+    if provider == "codex":
+        argv.remove("--ephemeral")
+        if session:
+            position = argv.index("-s")
+            del argv[position:position + 2]
+            argv.insert(2, "resume")
+            argv[-1:-1] = ["-c", 'sandbox_mode="workspace-write"']
+            argv.insert(-1, session)
+    elif provider == "claude":
+        argv.remove("--no-session-persistence")
+        if session:
+            argv += ["--resume", session]
+    elif provider == "antigravity" and session:
+        argv += ["--conversation", session]
     return argv
 
 

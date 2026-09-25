@@ -101,6 +101,8 @@ def main():
     lite_start.add_argument("goal")
     lite_start.add_argument("--id", help="Run id (default: slug of the goal)")
     lite_start.add_argument("--base", default="HEAD", help="Git ref to branch from")
+    lite_start.add_argument("--continuous", action="store_true",
+                            help="Opt in to the continuing-worker Lite workflow")
     for target in (lite_start, lite_sub.add_parser("resume", help="Resume a lite run")):
         if target is not lite_start:
             target.add_argument("run_id")
@@ -121,6 +123,18 @@ def main():
         target.add_argument("--max-turns", type=int, help="Stop after this many supervisor turns")
         target.add_argument("--gate", action="append", default=[], metavar="COMMAND",
                             help="Keeper-owned acceptance command required before every commit and done")
+        target.add_argument("--accept", action="append", default=[], metavar="COMMAND",
+                            help="Objective acceptance command for a continuous run")
+        target.add_argument("--scope", action="append", default=[], metavar="ROOT",
+                            help="Allowed repository root for continuous worker edits")
+        target.add_argument("--protect", action="append", default=[], metavar="PATH",
+                            help="Protected path in a continuous run")
+        target.add_argument("--worker-model", metavar="MODEL",
+                            help="Model for the continuing worker")
+        target.add_argument("--review-provider", choices=["claude", "codex", "antigravity"],
+                            help="Required objective reviewer when acceptance passed at baseline")
+        target.add_argument("--max-worker-tokens", type=int,
+                            help="Pause a continuous run at this worker token limit")
         target.add_argument("--no-audit", action="store_true",
                             help="Skip the independent audit of passing changes")
         target.add_argument("--detach", action="store_true",
@@ -370,6 +384,18 @@ def lite_options(args):
         options["setup"] = args.setup
     if args.gate:
         options["gates"] = args.gate
+    if args.accept:
+        options["acceptance"] = args.accept
+    if args.scope:
+        options["scope"] = args.scope
+    if args.protect:
+        options["protected"] = args.protect
+    if args.worker_model:
+        options["worker_model"] = args.worker_model
+    if args.review_provider:
+        options["review_provider"] = args.review_provider
+    if args.max_worker_tokens is not None:
+        options["max_worker_tokens"] = args.max_worker_tokens
     if args.no_audit:
         options["audit"] = {"enabled": False}
     return {key: value for key, value in options.items() if value is not None}
@@ -377,17 +403,23 @@ def lite_options(args):
 
 def lite_main(args):
     from .lite import LiteRun, slug
+    from .continuous import ContinuousRun
     if args.lite_command == "start":
-        run = LiteRun(args.repo, args.id or slug(args.goal))
+        cls = ContinuousRun if args.continuous else LiteRun
+        run = cls(args.repo, args.id or slug(args.goal))
         run.create(args.goal, args.base, lite_options(args))
     else:
-        run = LiteRun(args.repo, args.run_id)
+        probe = LiteRun(args.repo, args.run_id)
+        config_path = probe.path("config.json")
+        config = json.loads(config_path.read_text()) if config_path.exists() else {}
+        cls = ContinuousRun if config.get("workflow") == "continuous" else LiteRun
+        run = cls(args.repo, args.run_id)
     if args.lite_command == "status":
         print(run.status())
         return 0
     if args.lite_command == "note":
         run.note(args.text)
-        print("Queued for the supervisor's next turn.")
+        print("Queued for the next turn.")
         return 0
     if args.lite_command == "gate":
         run.add_gate(args.command)
@@ -403,6 +435,19 @@ def lite_main(args):
                     time.sleep(0.5)
     if args.lite_command == "resume":
         options = lite_options(args)
+        if isinstance(run, ContinuousRun):
+            if options.get("scope") or options.get("protected"):
+                raise ValueError("Continuous scope cannot change during resume")
+            if options.get("acceptance"):
+                options["acceptance"] = list(dict.fromkeys(
+                    run.config.get("acceptance", []) + options["acceptance"]))
+            if options.get("worker_model"):
+                state = run.state()
+                if state["state"] == "working":
+                    raise ValueError("Wait for the active worker before changing its model")
+                state["model"] = options["worker_model"]
+                state["session_id"] = None
+                run.save_state(state)
         if options.get("gates"):
             options["gates"] = run.config["gates"] + [g for g in options["gates"] if g not in run.config["gates"]]
         if options:
@@ -420,7 +465,7 @@ def lite_main(args):
         return 0
     state = run.run(args.max_turns)
     print(run.status())
-    return 0 if state["finished"] else 3
+    return 0 if state.get("finished", state.get("state") == "complete") else 3
 
 
 if __name__ == "__main__":

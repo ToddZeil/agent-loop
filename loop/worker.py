@@ -25,10 +25,26 @@ import threading
 import time
 from pathlib import Path
 
-from .adapters import command, parse, runner_command, run_process
+from .adapters import (command, continuing_worker_command, parse, runner_command,
+                       run_process, session_id)
 from .storage import atomic_json
 
 HEARTBEAT_SECONDS = 5
+
+
+def worktree_activity(workspace):
+    """Cheap idle signal; ignored dependency and Git trees are excluded."""
+    latest = (0, 0)
+    for root, dirs, files in os.walk(workspace):
+        dirs[:] = [name for name in dirs if name not in
+                   (".git", ".agent-loop", "node_modules", ".venv", "__pycache__")]
+        for name in files:
+            try:
+                stat = (Path(root) / name).stat()
+                latest = max(latest, (stat.st_mtime_ns, stat.st_size))
+            except OSError:
+                continue
+    return latest
 
 
 def workspace_lock_path(home, workspace):
@@ -97,6 +113,10 @@ def run_attempt(record_path):
         def beat():
             while not stop.wait(HEARTBEAT_SECONDS):
                 try:
+                    # Continuous attempts record provider ownership at launch;
+                    # do not race that write with a stale heartbeat snapshot.
+                    if record.get("continuous"):
+                        continue
                     current = json.loads(record_path.read_text())
                     current["heartbeat_at"] = time.time()
                     atomic_json(record_path, current)
@@ -107,13 +127,18 @@ def run_attempt(record_path):
         heart.start()
         task = record["task"]
         try:
-            agent = command(task["provider"], build_prompt(record), task.get("model"),
-                            task.get("effort"), sandbox=record.get("sandbox", False),
-                            workspace=workspace)
+            continuous = bool(record.get("continuous"))
+            agent = (continuing_worker_command(
+                task["provider"], record["prompt"], task.get("model"), task.get("effort"),
+                record.get("session_id"), workspace)
+                if continuous else command(task["provider"], build_prompt(record),
+                                           task.get("model"), task.get("effort"),
+                                           sandbox=record.get("sandbox", False),
+                                           workspace=workspace))
             idle = record.get("worker_idle_timeout_seconds")
             hard = (record.get("worker_max_seconds", 14400) if idle
                     else record.get("worker_timeout_seconds", 180))
-            argv = runner_command(task["provider"], agent, workspace, hard,
+            argv = agent if continuous else runner_command(task["provider"], agent, workspace, hard,
                                   record.get("unknown_quota_retry_seconds", 1800),
                                   task.get("quota_bucket", "codex"), idle,
                                   task["files"] if idle else ())
@@ -122,14 +147,24 @@ def run_attempt(record_path):
             # Written as output arrives so a running attempt can be followed live.
             stem = record["task_id"] + "-" + record["attempt_id"]
             live = (logs / (stem + ".jsonl"), logs / (stem + ".stderr"))
-            code, out, err = run_process(argv, workspace,
-                                         record.get("provider_runner_timeout_seconds", 86400),
-                                         tee=live)
+            def spawned(proc):
+                if continuous:
+                    record.update(provider_pid=proc.pid,
+                                  provider_start_identity=process_identity(proc.pid),
+                                  state="running", heartbeat_at=time.time())
+                    atomic_json(record_path, record)
+            code, out, err = run_process(
+                argv, workspace, hard if continuous else record.get(
+                    "provider_runner_timeout_seconds", 86400),
+                idle_timeout=idle if continuous else None, tee=live,
+                activity=(lambda: worktree_activity(workspace)) if continuous else None,
+                pass_fds=(handle.fileno(),) if continuous else (), on_spawn=spawned)
             result = parse(task["provider"], code, out, err)
             payload = {"status": result.status, "response": result.response,
                        "usage": result.usage, "retry_at": result.retry_at,
                        "error": result.error, "estimated_usd": result.estimated_usd,
-                       "invoked": result.invoked}
+                       "invoked": result.invoked,
+                       "session_id": session_id(task["provider"], out) if continuous else None}
         except (OSError, ValueError) as exc:
             payload = {"status": "error", "response": "", "usage": {}, "retry_at": 0,
                        "error": str(exc), "estimated_usd": 0, "invoked": False}
@@ -147,7 +182,10 @@ def run_attempt(record_path):
         atomic_json(record_path, record)
         return 0
     finally:
-        fcntl.flock(handle, fcntl.LOCK_UN)
+        # A continuous provider inherits this descriptor. Closing the wrapper's
+        # copy keeps the lock held if a descendant outlives the wrapper.
+        if not record.get("continuous"):
+            fcntl.flock(handle, fcntl.LOCK_UN)
         handle.close()
 
 
