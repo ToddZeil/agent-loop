@@ -584,18 +584,18 @@ class LiteRunTests(unittest.TestCase):
                                         ("antigravity", "standard"), ("claude", "claude-opus-5"))
         self.assertEqual(self.flag(argvs[0], "--model"), "claude-sonnet-5")
         self.assertEqual(self.flag(argvs[1], "--model"), "claude-haiku-4-5-20251001")
-        self.assertIn("gpt-5.6-sol", argvs[2])
-        self.assertIn("gpt-5.6-luna", argvs[3])
+        self.assertIn("gpt-6.1-sol", argvs[2])
+        self.assertIn("gpt-6-luna", argvs[3])
         self.assertIn('model_reasoning_effort="low"', argvs[3])   # catalog effort wins
         self.assertEqual(self.flag(argvs[4], "--model"), "gemini-3.8-flash-medium")
         self.assertEqual(self.flag(argvs[5], "--model"), "claude-opus-5")
         self.assertIn("light=gemini-3.8-flash-low", h.prompts[0])
-        self.assertEqual(h.plan()["t2"]["history"], ["strong:codex/gpt-5.6-sol:passed"])
+        self.assertEqual(h.plan()["t2"]["history"], ["strong:codex/gpt-6.1-sol:passed"])
 
     def test_models_outside_catalog_are_refused(self):
         h, argvs = self.dispatch_models(("codex", "gpt-6-astra"),
                                         ("antigravity", "gemini-3.1-pro-high"))
-        self.assertIn("gpt-5.6-terra", argvs[0])
+        self.assertIn("gpt-6-luna", argvs[0])
         self.assertNotIn("gpt-6-astra", argvs[0])
         self.assertEqual(self.flag(argvs[1], "--model"), "gemini-3.8-flash-medium")
         notes = h.state()["notes_for_supervisor"]
@@ -634,7 +634,7 @@ class LiteRunTests(unittest.TestCase):
             h.supervisor_replies.append(codex_note)
         h.run.run(max_turns=5)
         models = [argv[argv.index("--model") + 1] for argv in h.argvs if "--model" in argv]
-        self.assertEqual(models[:4], ["gpt-5.6-sol"] * 4)
+        self.assertEqual(models[:4], ["gpt-6.1-sol"] * 4)
         self.assertEqual(models[4], "gpt-6-astra")
         self.assertTrue(h.state()["escalated"])
 

@@ -38,7 +38,7 @@ DEFAULTS = {
     "workers": ["claude", "codex", "antigravity"],
     # Supervisor models per provider, and the stronger planning model used only
     # for a fresh session after the supervisor got stuck ("if needed").
-    "supervisor_models": {"codex": "gpt-5.6-sol"},
+    "supervisor_models": {"codex": "gpt-6.1-sol"},
     "supervisor_escalation": {"codex": "gpt-6-astra"},
     "supervisor_effort": "medium",
     # Worker model catalog: the only models a dispatch may use. The supervisor picks
@@ -146,9 +146,9 @@ DEFAULT_CATALOG = [
     {"provider": "claude", "tier": "light", "model": "claude-haiku-4-5-20251001"},
     {"provider": "claude", "tier": "standard", "model": "claude-sonnet-5"},
     {"provider": "claude", "tier": "strong", "model": "claude-opus-5"},
-    {"provider": "codex", "tier": "light", "model": "gpt-5.6-luna", "effort": "low"},
-    {"provider": "codex", "tier": "standard", "model": "gpt-5.6-terra"},
-    {"provider": "codex", "tier": "strong", "model": "gpt-5.6-sol"},
+    {"provider": "codex", "tier": "light", "model": "gpt-6-luna", "effort": "low"},
+    {"provider": "codex", "tier": "standard", "model": "gpt-6-luna"},
+    {"provider": "codex", "tier": "strong", "model": "gpt-6.1-sol"},
     {"provider": "antigravity", "tier": "light", "model": "gemini-3.8-flash-low"},
     {"provider": "antigravity", "tier": "standard", "model": "gemini-3.8-flash-medium"},
     {"provider": "antigravity", "tier": "strong", "model": "gemini-3.8-flash-high"},

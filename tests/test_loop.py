@@ -149,7 +149,7 @@ class AdapterTests(unittest.TestCase):
         self.assertTrue(any(prompt in argument for argument in command("claude", prompt)))
 
     def test_model_and_prompt_order_matches_each_cli(self):
-        for provider, model in (("codex", "gpt-5.6-luna"),
+        for provider, model in (("codex", "gpt-6-luna"),
                                 ("claude", "claude-sonnet-5")):
             argv = command(provider, "Return JSON only", model)
             model_index = argv.index("--model")
