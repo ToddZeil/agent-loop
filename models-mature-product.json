@@ -1,0 +1,7 @@
+[
+  {"provider": "claude", "tier": "strong", "model": "claude-opus-5-5"},
+  {"provider": "claude", "tier": "standard", "model": "claude-opus-5-5"},
+  {"provider": "codex", "tier": "strong", "model": "gpt-6.1-sol"},
+  {"provider": "codex", "tier": "standard", "model": "gpt-6.1-sol"},
+  {"provider": "codex", "tier": "light", "model": "gpt-6.1-sol"}
+]

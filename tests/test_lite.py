@@ -154,6 +154,28 @@ class DecideTests(unittest.TestCase):
         self.assertIsNone(extract_actions("no json"))
 
 
+class HomeSupervisorTests(unittest.TestCase):
+    def test_returns_to_home_when_available(self):
+        decision = keeper.decide({"supervisor_unavailable": False, "available": ["claude"],
+                                  "home_available": "claude"})
+        self.assertEqual((decision["action"], decision["provider"]), ("switch_supervisor", "claude"))
+        self.assertEqual(keeper.decide({"supervisor_unavailable": False})["action"], "continue")
+
+    def test_held_home_is_used_only_after_it_becomes_available(self):
+        h = Harness(self)
+        h.run.save("config.json", {**h.run.load("config.json"), "supervisor_home": "claude"})
+        state = h.state()
+        state.update(provider="codex", holds={"claude": h.run.clock() + 3600})
+        obs = h.run.observe(state, None, [], [])
+        self.assertIsNone(obs["home_available"])
+        self.assertEqual(keeper.decide(obs)["action"], "continue")
+        state["holds"].clear()
+        obs = h.run.observe(state, None, [], [])
+        h.run.apply_decision(state, keeper.decide(obs), obs)
+        self.assertEqual(state["provider"], "claude")
+        self.assertIsNone(h.run.observe(state, None, [], [])["home_available"])
+
+
 class ProviderOrderTests(unittest.TestCase):
     NOW = 1_789_000_000
     DAY = 86400

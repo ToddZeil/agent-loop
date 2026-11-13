@@ -41,6 +41,8 @@ DEFAULTS = {
     "supervisor_models": {"codex": "gpt-6.1-sol"},
     "supervisor_escalation": {"codex": "gpt-6-astra"},
     "supervisor_effort": "medium",
+    # Preferred supervisor: after a fallback the keeper returns to it as soon as it is usable.
+    "supervisor_home": None,
     # Worker model catalog: the only models a dispatch may use. The supervisor picks
     # a tier or an exact model; anything else resolves to the provider's standard tier.
     "catalog": None,
@@ -1132,7 +1134,9 @@ class LiteRun:
                      if action.get("op") == "dispatch"] or [0]) > keeper.LARGE_CODE_LINES
         if edited or large:
             state["violations"] += 1
+        home = self.config.get("supervisor_home")
         return {"supervisor_unavailable": unavailable, "available": options,
+                "home_available": home if home and home != provider and home in options else None,
                 "earliest_reset_seconds": earliest, "edited_files": edited, "large_code": large,
                 "violations": state["violations"], "context_tokens": state["context_tokens"],
                 "reset_at": self.config["reset_at_tokens"],

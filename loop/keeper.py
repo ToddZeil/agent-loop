@@ -101,6 +101,9 @@ def decide(obs):
             return _decision("switch_supervisor", "1: supervisor unavailable", provider=available[0])
         wait = obs.get("earliest_reset_seconds") or 1800
         return _decision("wait", "1: no supervisor available", wait_seconds=max(60, int(wait)))
+    if obs.get("home_available"):
+        return _decision("switch_supervisor", "1b: preferred supervisor available again",
+                         provider=obs["home_available"])
     if obs.get("edited_files") or obs.get("large_code"):
         if obs.get("violations", 0) >= 2:
             return _decision("reset_context", "2: repeated supervisor violation", reminder=REMINDER)

@@ -30,6 +30,17 @@ jobs:
       - name: Run tests
         run: python3 -m unittest discover -s tests -v
 
+  javascript:
+    name: JavaScript unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Run collector tests
+        run: node --test tests/seo_lite_collect.test.mjs
+
   lint:
     name: Style check
     runs-on: ubuntu-latest

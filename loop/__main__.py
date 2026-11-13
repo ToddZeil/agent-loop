@@ -110,6 +110,9 @@ def main():
         target.add_argument("--workers", help="Comma-separated worker providers")
         target.add_argument("--supervisor-model", action="append", default=[],
                             metavar="PROVIDER=MODEL")
+        target.add_argument("--home-supervisor", choices=["claude", "codex", "antigravity"],
+                            help="Preferred supervisor: switch back to it whenever it is "
+                                 "available again after a fallback")
         target.add_argument("--provider-order", choices=["expiring", "least_used"],
                             help="Pick providers whose long quota window resets soonest "
                                  "(default) or the least used")
@@ -359,7 +362,8 @@ def main():
 
 def lite_options(args):
     options = {"keeper_model": args.keeper_model, "reset_at_tokens": args.reset_at_tokens,
-               "provider_order": args.provider_order}
+               "provider_order": args.provider_order,
+               "supervisor_home": args.home_supervisor}
     for name in ("supervisors", "workers"):
         value = getattr(args, name)
         if value:

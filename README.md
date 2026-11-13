@@ -138,6 +138,7 @@ Workers can only use models from a tiered catalog, and the supervisor picks a ti
 - **Retired models:** entries that `agy models` or Codex's model cache no longer list are dropped at startup.
 - **History:** each task records its tier, model and outcome per attempt.
 - **Codex supervisor:** runs on `gpt-6.1-sol` and moves to `gpt-6-astra` only for the fresh session after the keeper finds it stuck. `--setup` commands, such as dependency installs, run once per worktree without a model call. `lite status` shows estimated spend split into supervisor and worker.
+- **Preferred supervisor:** `--home-supervisor claude` (also `codex` or `antigravity`) returns to that provider after a fallback once its quota and availability allow it. Include it in `--supervisors`.
 
 **Keeping workers honest.** Workers optimise for passing checks, and a supervisor that trusts "passed" gets gamed. In a long real run, workers stamped claims with generic reasons, swapped in templated reasons, appended ids to make templates look unique, left stale dates on "rewritten" work, and cited DOIs belonging to unrelated papers, all while the supervisor's checks passed. The keeper now defends against this independently of the supervisor:
 
