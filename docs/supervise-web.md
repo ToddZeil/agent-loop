@@ -261,3 +261,7 @@ Model and effort selectors remain visible above the conversation. Use **↻** be
 picker to refresh its catalogue. A smaller Codex cache no longer deletes previously seen
 choices; those entries are labelled **previously seen**, which does not guarantee current
 account access. Entries explicitly marked hidden by the CLI are excluded.
+
+The **Add agents** form preloads model choices. Its model field shows a loading state
+until the initial catalogue response arrives, then displays the number of saved model
+choices. Choose an explicit **Codex model** from that dropdown or keep provider default.

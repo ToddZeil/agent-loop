@@ -204,3 +204,5 @@ dialog label { display: block; font-size: 11px; color: #a1b39e; margin-top: 16px
 .model-refresh:hover:not(:disabled) { background:#324535; }
 .agent-model-settings { flex-shrink:0; }
 .agent-settings { flex-shrink:1; min-height:34px; }
+
+.model-picker-status { display:block; margin-top:6px; color:#8da784; font-size:10px; line-height:1.5; font-weight:400; }
