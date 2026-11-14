@@ -283,7 +283,7 @@ def validate_plan(plan, root=None):
         if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,60}", task["id"]) or task["id"] in ids:
             raise ValueError("Invalid or duplicate task id")
         ids.add(task["id"])
-        if task["provider"] not in ("codex", "claude", "antigravity", "command"):
+        if task["provider"] not in ("codex", "claude", "antigravity", "muse", "command"):
             raise ValueError("Unsupported provider")
         if task["provider"] == "command":
             argv = task.get("run")
@@ -294,7 +294,7 @@ def validate_plan(plan, root=None):
         review = task.get("review")
         if review is not None:
             if (not isinstance(review, dict)
-                    or review.get("provider") not in ("codex", "claude", "antigravity")
+                    or review.get("provider") not in ("codex", "claude", "antigravity", "muse")
                     or not isinstance(review.get("instructions", ""), str)
                     or not isinstance(review.get("attach", []), list)):
                 raise ValueError("Task %s review needs a provider and optional instructions/attach"
@@ -350,13 +350,13 @@ def validate_plan(plan, root=None):
     if not isinstance(budgets, dict):
         raise ValueError("provider_token_budgets must be an object")
     for provider, budget in budgets.items():
-        if provider not in ("codex", "claude", "antigravity"):
+        if provider not in ("codex", "claude", "antigravity", "muse"):
             raise ValueError("Unsupported provider in provider_token_budgets")
         check_budget(budget)
     if not isinstance(plan.get("failure_review", False), bool):
         raise ValueError("failure_review must be a boolean")
     failure_provider = plan.get("failure_review_provider")
-    if failure_provider is not None and failure_provider not in ("codex", "claude", "antigravity"):
+    if failure_provider is not None and failure_provider not in ("codex", "claude", "antigravity", "muse"):
         raise ValueError("Unsupported failure_review_provider")
     setup = plan.get("setup")
     if setup is not None and (not isinstance(setup, list) or not setup
@@ -445,7 +445,7 @@ class Engine:
                                   ("reason", "TEXT DEFAULT ''"), ("superseded_by", "TEXT")):
             if name not in run_columns:
                 self.db.execute("ALTER TABLE runs ADD COLUMN " + name + " " + declaration)
-        for name in ("codex", "claude", "antigravity"):
+        for name in ("codex", "claude", "antigravity", "muse"):
             self.db.execute("INSERT OR IGNORE INTO providers(name) VALUES (?)", (name,))
         self.db.commit()
 

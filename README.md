@@ -2,7 +2,7 @@
 
 A small custom supervisor is a good fit for this workflow. Keep the always-on loop in ordinary code: it costs no model tokens to wait, survives model quota exhaustion, and can resume after a restart. Use a model only to plan, implement a bounded section, or review a milestone.
 
-This is a working local prototype using Python 3.9+ and its standard library. No server, queue service, framework, or API key is required. It invokes the installed `codex`, `claude`, and `agy` terminal clients using their existing authentication.
+This is a working local prototype using Python 3.9+ and its standard library. No server, queue service, framework, or API key is required. It invokes the installed `codex`, `claude`, `agy`, and `muse` terminal clients using their existing authentication.
 
 ## Try it
 
@@ -115,7 +115,7 @@ python3 -m loop --repo /path/to/repo lite resume <id>
 
 There are three layers:
 
-- **Supervisor:** a cloud model running a read-only, resumable CLI session, using each CLI's working read-only setup: claude `--tools Read,Grep,Glob` (its plan mode made the supervisor wait for approval), codex `sandbox_mode="read-only"`, and agy `--mode plan` (agy's default headless mode denies reads too; its plan mode reads, blocks writes, and still replies). The supervisor role is sent as system/developer instructions (claude `--append-system-prompt`, codex `developer_instructions`), or in the prompt for agy. Each turn it gets the goal, plan, handoff notes and new worker results, and replies with JSON actions: `plan`, `dispatch`, `accept`, `discard`, `note`, `wait`, `done`. Any file change it makes is reverted.
+- **Supervisor:** a cloud model running a read-only, resumable CLI session, using each CLI's working read-only setup: claude `--tools Read,Grep,Glob` (its plan mode made the supervisor wait for approval), codex `sandbox_mode="read-only"`, agy `--mode plan` (agy's default headless mode denies reads too; its plan mode reads, blocks writes, and still replies), and muse `--disable-write --disable-shell`. The supervisor role is sent as system/developer instructions (claude `--append-system-prompt`, codex `developer_instructions`), or in the prompt for agy and muse. Each turn it gets the goal, plan, handoff notes and new worker results, and replies with JSON actions: `plan`, `dispatch`, `accept`, `discard`, `note`, `wait`, `done`. Any file change it makes is reverted.
 - **Workers:** full coding agents in `.agent-loop/worktrees/lite-<id>` (branch `lite/<id>`). They can edit any file and run builds or installs; only delegation is disabled. When a task's `check` passes, all changes are committed. When it fails, the changes stay uncommitted and the supervisor decides what to do next.
 - **Keeper:** Python rules (`loop/keeper.py`), not a model, decide after every turn:
   - **Switch** supervisors when quota or auth runs out.
@@ -188,3 +188,25 @@ Run only trusted plans: setup and acceptance-check commands execute locally. Pro
 `run --review` asks a model to sanity-check the plan itself before the first task runs — whether each task's goal looks real/needed and whether its `check` could plausibly verify its `prompt` — and aborts before touching the repo if it declines. `publish --review` asks a model to compare the finished diff against each task's `prompt` and flag anything fabricated, unrelated, or unnecessary, aborting before the branch is pushed if it declines. Both are optional and off by default; neither replaces or weakens the trusted `check` command, which remains the only thing that actually gates a section being committed. Set `review_provider`/`review_model` in the plan to pick which CLI performs the review (defaults to `claude`).
 
 This does not install a background daemon. macOS cannot run the supervisor while the machine is asleep or powered off. For unattended operation, use `launchd` on an awake Mac or `systemd` on an always-on machine. See [the design and implementation stages](docs/DESIGN.md) and [the test report](docs/TEST-REPORT.md).
+
+### Multiple independent workers across repositories
+
+Use `python3 -m loop supervise start tasks.json --home /path/to/new-fleet --detach`
+to keep independent Codex sessions going in isolated worktrees, with supervisor answers
+when workers ask questions or get stuck. See [the supervise guide](docs/supervise.md)
+and [example manifest](examples/supervise.json) for setup, status, notes, and recovery.
+
+### Local browser workspace
+
+Run `scripts/setup-supervise-web`, then `scripts/supervise-web` and open
+**http://127.0.0.1:8765**. Use one persistent supervisor, add/remove agents live, save projects for selection,
+configure worker models and subagents, watch completion/blocker streams, and open
+local terminals. A local-model keeper is optional and off by default.
+See the [browser workspace guide](docs/supervise-web.md) for setup and ownership behavior.
+
+The supervisor workspace includes cached provider model choices, worker and supervisor
+effort controls, optional parallel limits, live conversation output with expandable
+commands, automatic startup when sending worker messages, and durable token monitoring.
+Run `scripts/setup-supervise-web` once after cloning, then `scripts/supervise-web`.
+New workers use committed `HEAD`; commit and push integrated changes before launching
+workers that need the updated application.

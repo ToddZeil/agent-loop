@@ -30,8 +30,8 @@ from .adapters import (SYSTEM_INSTRUCTIONS, command, context_tokens, parse, prov
                        usage_fraction)
 from .storage import atomic_json
 
-PROVIDERS = ("claude", "codex", "antigravity")
-CLI = {"claude": "claude", "codex": "codex", "antigravity": "agy"}
+PROVIDERS = ("claude", "codex", "antigravity", "muse")
+CLI = {"claude": "claude", "codex": "codex", "antigravity": "agy", "muse": "muse"}
 FAILURE_OUTCOMES = ("failed", "gate_failed", "worker_error")
 DEFAULTS = {
     "supervisors": ["claude", "codex", "antigravity"],
@@ -41,6 +41,7 @@ DEFAULTS = {
     "supervisor_models": {"codex": "gpt-6.1-sol"},
     "supervisor_escalation": {"codex": "gpt-6-astra"},
     "supervisor_effort": "medium",
+    "worker_effort": None,
     # Preferred supervisor: after a fallback the keeper returns to it as soon as it is usable.
     "supervisor_home": None,
     # Worker model catalog: the only models a dispatch may use. The supervisor picks
@@ -127,7 +128,7 @@ model, at any time. Your `note` is the only memory that survives besides the pla
 Reply with ONE JSON object and nothing else:
 {"actions": [
   {"op": "plan", "tasks": [{"id": "short-slug", "title": "...", "prompt": "...", "check": "shell command or null"}]},
-  {"op": "dispatch", "task": "id", "provider": "claude|codex|antigravity", "model": "light|standard|strong or a catalog model id", "prompt": "instructions for this attempt"},
+  {"op": "dispatch", "task": "id", "provider": "claude|codex|antigravity|muse", "model": "light|standard|strong or a catalog model id", "prompt": "instructions for this attempt"},
   {"op": "accept", "task": "id"},
   {"op": "discard", "task": "id"},
   {"op": "note", "text": "what is done, what you learned, what is next (<= 300 words)"},
@@ -154,6 +155,9 @@ DEFAULT_CATALOG = [
     {"provider": "antigravity", "tier": "light", "model": "gemini-3.8-flash-low"},
     {"provider": "antigravity", "tier": "standard", "model": "gemini-3.8-flash-medium"},
     {"provider": "antigravity", "tier": "strong", "model": "gemini-3.8-flash-high"},
+    {"provider": "muse", "tier": "light", "model": "muse-spark-1.2", "effort": "low"},
+    {"provider": "muse", "tier": "standard", "model": "muse-spark-1.3-contributor", "effort": "medium"},
+    {"provider": "muse", "tier": "strong", "model": "muse-spark-1.3-contributor", "effort": "high"},
 ]
 
 
@@ -167,6 +171,22 @@ def available_models(provider):
         data = json.loads((Path.home() / ".codex" / "models_cache.json").read_text())
         models = data.get("models", data) if isinstance(data, dict) else data
         return {item["slug"] for item in models if isinstance(item, dict) and item.get("slug")}
+    if provider == "muse":
+        catalog_dir = Path.home() / ".local" / "share" / "muse" / "model-catalog"
+        if not catalog_dir.is_dir():
+            return None
+        models = set()
+        for path in catalog_dir.glob("*.json"):
+            try:
+                data = json.loads(path.read_text())
+            except (OSError, ValueError):
+                continue
+            rows = data.get("rows", []) if isinstance(data, dict) else []
+            for row in rows:
+                if (isinstance(row, dict) and row.get("visibility", "visible") == "visible"
+                        and isinstance(row.get("model_id"), str)):
+                    models.add(row["model_id"])
+        return models or None
     return None  # claude has no model list command
 
 
@@ -459,9 +479,14 @@ class LiteRun:
             else:
                 target = self.worktree / name
                 try:
-                    content = target.read_text(errors="replace") if target.is_file() else ""
+                    data = target.read_bytes() if target.is_file() else b""
                 except OSError:
-                    content = ""
+                    data = b""
+                if b"\0" in data:
+                    # Binary bytes would end up in a CLI argv, which cannot hold NUL.
+                    chunks.append((name, "new binary file %s (%d bytes)" % (name, len(data))))
+                    continue
+                content = data.decode(errors="replace")
                 body = "new file " + name + "\n" + "\n".join("+" + line for line in content.splitlines())
             added += [line[1:] for line in body.splitlines()
                       if line.startswith("+") and not line.startswith("+++")]
@@ -527,7 +552,7 @@ class LiteRun:
                   + "\nKEEPER GATES: " + json.dumps(self.config["gates"])
                   + ("\n\nTEMPLATE WARNING: %d of %d prose lines share the pattern %r."
                      % (template["count"], template["prose_lines"], template["pattern"]) if template else "")
-                  + "\n\nWORKTREE: " + str(self.worktree) + "\n\nDIFF:\n" + diff)
+                  + "\n\nWORKTREE: " + str(self.worktree) + "\n\nDIFF:\n" + diff).replace("\0", "")
         if auditor not in SYSTEM_INSTRUCTIONS:
             prompt = AUDIT_ROLE + "\n\n" + prompt
         argv = supervisor_command(auditor, prompt, model, "medium", None, self.worktree,
@@ -890,9 +915,9 @@ class LiteRun:
         if model_note:
             state["notes_for_supervisor"].append(model_note)
         model = entry["model"]
-        # Antigravity encodes effort in the model id; elsewhere the catalog's effort
-        # wins over the supervisor's so a light tier stays light.
-        effort = None if provider == "antigravity" else (entry.get("effort") or action.get("effort"))
+        # An explicit worker setting overrides catalogue defaults. The adapter
+        # omits the flag when an Antigravity model already encodes its effort.
+        effort = config.get("worker_effort") or entry.get("effort") or action.get("effort")
         argv = command(provider, prompt, model, effort,
                        worker=True, workspace=self.worktree, scope="worktree")
         head = git(self.worktree, "rev-parse", "HEAD")
@@ -1037,23 +1062,18 @@ class LiteRun:
         problems = []
         if open_tasks:
             problems.append("Tasks not done or dropped: " + ", ".join(open_tasks))
+        if not plan["tasks"]:
+            problems.append("The plan has no tasks.")
         if changed_files(self.worktree):
             problems.append("Worktree has uncommitted changes; accept or discard them.")
-        for task in plan["tasks"]:
-            check = check_argv(task.get("check")) if task["status"] == "done" else None
-            if check and not problems:
-                code, out, err = run_process(check, self.worktree,
-                                             self.config["check_timeout_seconds"])
-                if code:
-                    problems.append("Check for %s fails on the final tree:\n%s"
-                                    % (task["id"], tail(out + "\n" + err, 30)))
+        # Task checks are attempt-time checks: dispatch() already ran them before
+        # committing each task. Replaying them here after all commits breaks checks
+        # that intentionally inspect the task diff (for example, `! git diff --quiet`).
+        # Final-state invariants belong in keeper-owned gates below.
         if not problems and self.config["gates"]:
             ok, gate_output = self.run_gates()
             if not ok:
                 problems.append(gate_output)
-        self.revert_to((git(self.worktree, "rev-parse", "HEAD"), {}))
-        if not plan["tasks"]:
-            problems.append("The plan has no tasks.")
         if problems:
             state["notes_for_supervisor"].append("`done` rejected:\n" + "\n".join(problems))
             self.journal("done_rejected", problems=" | ".join(problems)[:400])

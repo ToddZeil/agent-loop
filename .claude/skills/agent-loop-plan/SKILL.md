@@ -1,6 +1,6 @@
 ---
 name: agent-loop-plan
-description: Author and validate JSON milestone plans for the agent-loop supervisor (loop/engine.py) — the file passed to `python3 -m loop run <plan>.json`. Use when the user asks to create, write, or fix an agent-loop plan, task list, or milestone JSON, or mentions clamp-style acceptance checks, codex/claude/antigravity task providers, or `loop run`.
+description: Author and validate JSON milestone plans for the agent-loop supervisor (loop/engine.py) — the file passed to `python3 -m loop run <plan>.json`. Use when the user asks to create, write, or fix an agent-loop plan, task list, or milestone JSON, or mentions clamp-style acceptance checks, codex/claude/antigravity/muse task providers, or `loop run`.
 ---
 
 # Agent Loop Plan Authoring
@@ -51,7 +51,7 @@ A worker stopped by either timeout is not treated as a failed repair: its edits 
 | `unknown_quota_retry_seconds` | 1800 | retry delay when a rate-limit has no machine-readable reset |
 | `read_codex_quotas` | true | preflight Codex's app-server quota API before spending a turn |
 | `failure_review` | false | on a failed trusted check or terminal worker error, ask one advisory checker whether to retry or block |
-| `failure_review_provider` | task's provider | provider for the failure checker; it must be `codex`, `claude`, or `antigravity` |
+| `failure_review_provider` | task's provider | provider for the failure checker; it must be `codex`, `claude`, `antigravity`, or `muse` |
 | `failure_review_model` | none | optional model id for the failure checker |
 | `provider_token_budgets` | none | e.g. `{"codex": 8000000}` — local admission cap per provider, counted across this plan's completed responses; omit it when no local ceiling is intended |
 | `review_provider` | `claude` | which CLI performs optional self-review (see below), only used if `--review` is passed |
@@ -66,7 +66,7 @@ A worker stopped by either timeout is not treated as a failed repair: its edits 
 ```json
 {
   "id": "short-lowercase-slug",
-  "provider": "codex | claude | antigravity | command",
+  "provider": "codex | claude | antigravity | muse | command",
   "model": "provider-specific model id",
   "files": ["relative/path/one.py"],
   "prompt": "Implementation instructions for exactly these files.",
@@ -75,7 +75,7 @@ A worker stopped by either timeout is not treated as a failed repair: its edits 
 ```
 
 - `id`: unique within the plan, same slug pattern as plan `id`.
-- `provider`: exactly one of `codex`, `claude`, `antigravity`, or `command` (a trusted host command given as `run`, no model).
+- `provider`: exactly one of `codex`, `claude`, `antigravity`, `muse`, or `command` (a trusted host command given as `run`, no model).
 - `files`: non-empty, no duplicates. These are the *only* paths the worker is allowed to write; any other changed/untracked file in the worktree aborts the run with "Unexpected changes in managed worktree." Paths are validated against path traversal (`safe_path`) — no `..`, no absolute paths.
 - `check`: a non-empty **argv list** (not a shell string) run inside the task's worktree with cwd = workspace. It must be committed before the run and must not be one of the worker-writable `files`. On failure, the worker's changes are rolled back and the next attempt receives the check output.
 - `prompt`: task-specific implementation instructions. Workers use normal repository tools and edit the managed worktree directly; delegation and subagents remain disabled. Do not request a JSON/file-bundle response.

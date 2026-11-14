@@ -1,0 +1,12 @@
+#!/usr/bin/env python3
+"""Launch the local browser application from any directory."""
+import os
+from pathlib import Path
+import sys
+
+root = Path(__file__).resolve().parent.parent
+python = root / '.agent-loop' / 'web-venv' / 'bin' / 'python'
+if not python.exists():
+    raise SystemExit('Run scripts/setup-supervise-web first to install local web dependencies.')
+os.chdir(root)
+os.execv(str(python), [str(python), '-m', 'loop.web', *sys.argv[1:]])

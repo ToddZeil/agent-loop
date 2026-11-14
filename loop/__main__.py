@@ -48,9 +48,9 @@ def main():
     planner = sub.add_parser("plan", help="Scout context with a cheap model, then author a plan")
     planner.add_argument("request")
     planner.add_argument("--output", required=True)
-    planner.add_argument("--context-provider", choices=["codex", "claude", "antigravity"], default="antigravity")
+    planner.add_argument("--context-provider", choices=["codex", "claude", "antigravity", "muse"], default="antigravity")
     planner.add_argument("--context-model", default="gemini-3.8-flash-low")
-    planner.add_argument("--planner-provider", choices=["codex", "claude", "antigravity"], default="antigravity")
+    planner.add_argument("--planner-provider", choices=["codex", "claude", "antigravity", "muse"], default="antigravity")
     planner.add_argument("--planner-model", default="gemini-3.1-pro-high")
     planner.add_argument("--usage-timeout", type=int, default=30)
     planner.add_argument("--timeout", type=int, default=180)
@@ -62,7 +62,7 @@ def main():
     release.add_argument("--review", action="store_true",
                           help="Self-review the diff against task prompts before publishing; abort if declined")
     hold = sub.add_parser("hold", help="Record an observed provider reset time")
-    hold.add_argument("provider", choices=["codex", "claude", "antigravity"])
+    hold.add_argument("provider", choices=["codex", "claude", "antigravity", "muse"])
     hold.add_argument("--until", type=float, required=True, help="Unix timestamp; 0 clears the hold")
     hold.add_argument("--reason", default="Manually observed quota window")
     queue = sub.add_parser("queue", help="Manage the durable objective queue")
@@ -110,6 +110,10 @@ def main():
         target.add_argument("--workers", help="Comma-separated worker providers")
         target.add_argument("--supervisor-model", action="append", default=[],
                             metavar="PROVIDER=MODEL")
+        target.add_argument("--supervisor-effort", choices=["low", "medium", "high"],
+                            help="Supervisor reasoning effort")
+        target.add_argument("--worker-effort", choices=["low", "medium", "high"],
+                            help="Worker reasoning effort override")
         target.add_argument("--home-supervisor", choices=["claude", "codex", "antigravity"],
                             help="Preferred supervisor: switch back to it whenever it is "
                                  "available again after a fallback")
@@ -152,7 +156,11 @@ def main():
     lite_status.add_argument("run_id")
     lite_tail = lite_sub.add_parser("tail", help="Follow the run journal")
     lite_tail.add_argument("run_id")
+    from . import supervise
+    supervise.add_parser(sub)
     args = parser.parse_args()
+    if args.command == "supervise":
+        return supervise.main(args)
     if args.command == "lite":
         return lite_main(args)
     engine = Engine(args.repo)
@@ -208,7 +216,7 @@ def main():
             print(json.dumps(provider_limits("codex", Path(args.repo)), indent=2))
         elif args.command == "usage":
             report = {}
-            for provider in ("codex", "claude", "antigravity"):
+            for provider in ("codex", "claude", "antigravity", "muse"):
                 try:
                     limits = provider_limits(provider, Path(args.repo), args.timeout)
                     report[provider] = {"status": "ok", "limits": limits.get(
@@ -363,7 +371,8 @@ def main():
 def lite_options(args):
     options = {"keeper_model": args.keeper_model, "reset_at_tokens": args.reset_at_tokens,
                "provider_order": args.provider_order,
-               "supervisor_home": args.home_supervisor}
+               "supervisor_home": args.home_supervisor,
+               "worker_effort": args.worker_effort, "supervisor_effort": args.supervisor_effort}
     for name in ("supervisors", "workers"):
         value = getattr(args, name)
         if value:
