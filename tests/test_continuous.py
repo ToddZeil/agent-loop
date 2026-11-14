@@ -41,6 +41,47 @@ class ContinuousBase(unittest.TestCase):
 
 
 class ContinuousTests(ContinuousBase):
+    def test_worker_effort_is_saved_in_each_attempt(self):
+        for effort in (None, "high", "low"):
+            with self.subTest(effort=effort):
+                config = self.run.load("config.json")
+                if effort:
+                    config["worker_effort"] = effort
+                self.run.save("config.json", config)
+                state = self.run.state()
+                state.update(state="ready", attempt=None)
+                self.run.save_state(state)
+                with mock.patch.object(self.run, "_spawn"):
+                    self.run._launch(state)
+                attempt = self.run.load("attempts/" + state["attempt"] + ".json")
+                self.assertEqual(attempt["task"]["effort"], effort or "medium")
+
+    def test_resume_persists_effort_without_resetting_session(self):
+        from loop.__main__ import main
+        state = self.run.state()
+        state["session_id"] = "existing-session"
+        self.run.save_state(state)
+        for flags in (["--worker-effort", "high", "--supervisor-effort", "low"], []):
+            with mock.patch("sys.argv", ["loop", "--repo", str(self.repo), "lite", "resume",
+                                         self.run.id, *flags]), \
+                    mock.patch.object(ContinuousRun, "run", return_value={"state": "ready"}), \
+                    mock.patch("builtins.print"):
+                main()
+            self.assertEqual(self.run.config["worker_effort"], "high")
+            self.assertEqual(self.run.config["supervisor_effort"], "low")
+            self.assertEqual(self.run.state()["session_id"], "existing-session")
+
+    def test_objective_reviewer_uses_selected_supervisor_effort(self):
+        config = self.run.load("config.json")
+        config.update(review_provider="claude", supervisor_effort="low")
+        self.run.save("config.json", config)
+        response = json.dumps({"type": "result", "is_error": False,
+                               "result": '{"verdict":"pass"}'})
+        with mock.patch.object(self.run, "invoke", return_value=(0, response, "")) as invoke:
+            self.assertTrue(self.run._review(self.run.state(), ["app.py"]))
+        argv = invoke.call_args.args[0]
+        self.assertEqual(argv[argv.index("--effort") + 1], "low")
+
     def test_failed_check_repairs_in_same_session_and_preserves_edits(self):
         state = self.run.state()
         (self.run.worktree / "app.py").write_text("value = 3\n")
@@ -133,10 +174,25 @@ class ContinuousTests(ContinuousBase):
         leader = subprocess.Popen(["sleep", "30"], start_new_session=True)
         self.addCleanup(leader.wait)
         self.addCleanup(leader.kill)
-        record = {"provider_pid": leader.pid, "provider_start_identity": process_identity(leader.pid)}
+        identity = process_identity(leader.pid)
+        if not identity:
+            self.skipTest("Host does not expose process start identities through ps")
+        record = {"provider_pid": leader.pid, "provider_start_identity": identity}
         self.assertTrue(self.run._group_present(record))
         record["provider_start_identity"] = "Thu Jan  1 00:00:00 1970"
         self.assertFalse(self.run._group_present(record))
+
+    def test_group_identity_mismatch_and_unavailable_identity(self):
+        record = {"provider_pid": 12345, "provider_start_identity": "original-start"}
+        with mock.patch("loop.continuous.process_identity", return_value="different-start"), \
+                mock.patch("loop.continuous.os.killpg") as killpg:
+            self.assertFalse(self.run._group_present(record))
+            killpg.assert_not_called()
+        # Missing host metadata must keep the ownership check conservative.
+        with mock.patch("loop.continuous.process_identity", return_value=""), \
+                mock.patch("loop.continuous.os.killpg") as killpg:
+            self.assertTrue(self.run._group_present(record))
+            killpg.assert_called_once_with(12345, 0)
 
     def test_symlink_escaping_the_worktree_is_out_of_scope(self):
         os.symlink("/etc", self.run.worktree / "escape")
@@ -162,6 +218,10 @@ class ContinuousTests(ContinuousBase):
         self.assertEqual(claude[claude.index("--effort") + 1], "medium")
         agy = continuing_worker_command("antigravity", "P", None, None, "SID", "/w")
         self.assertEqual(agy[-2:], ["--conversation", "SID"])
+        muse = continuing_worker_command("muse", "P", "m", "medium", "SID", "/w")
+        self.assertEqual(muse[:2], ["muse", "exec"])
+        self.assertEqual(muse[-3:-1], ["--session-id", "SID"])
+        self.assertTrue(muse[-1].startswith("P"))
 
     def test_worktree_activity_ignores_git_and_dependency_trees(self):
         before = worktree_activity(self.run.worktree)

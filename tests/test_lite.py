@@ -1,13 +1,48 @@
+import contextlib
+import io
 import json
 import subprocess
 import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
+from unittest import mock
 
 from loop import keeper
 from loop.adapters import quota_expiry
 from loop.lite import LiteRun, extract_actions
+
+
+class EffortOptionsTests(unittest.TestCase):
+    def options(self, *arguments):
+        from loop.__main__ import main, lite_options
+        with mock.patch("sys.argv", ["loop", "lite", *arguments]), \
+                mock.patch("loop.__main__.lite_main", side_effect=lite_options):
+            return main()
+
+    def test_start_and_resume_accept_effort_settings(self):
+        for operation in ("start", "resume"):
+            for effort in ("low", "medium", "high"):
+                with self.subTest(operation=operation, effort=effort):
+                    options = self.options(operation, "example", "--worker-effort", effort,
+                                           "--supervisor-effort", effort)
+                    self.assertEqual(options["worker_effort"], effort)
+                    self.assertEqual(options["supervisor_effort"], effort)
+
+    def test_omitted_effort_preserves_saved_settings(self):
+        for operation in ("start", "resume"):
+            options = self.options(operation, "example")
+            self.assertNotIn("worker_effort", options)
+            self.assertNotIn("supervisor_effort", options)
+
+    def test_invalid_effort_is_rejected(self):
+        for operation in ("start", "resume"):
+            for flag in ("--worker-effort", "--supervisor-effort"):
+                with self.subTest(operation=operation, flag=flag), \
+                        contextlib.redirect_stderr(io.StringIO()), \
+                        self.assertRaises(SystemExit) as error:
+                    self.options(operation, "example", flag, "invalid")
+                self.assertEqual(error.exception.code, 2)
 
 
 def sh(cwd, *args):
@@ -511,12 +546,12 @@ class LiteRunTests(unittest.TestCase):
         journal = h.run.path("journal.jsonl").read_text()
         self.assertIn('"failure_class": "local-model"', journal)
 
-    def test_done_with_failing_check_is_rejected(self):
-        h = Harness(self)
+    def test_done_with_failing_gate_is_rejected(self):
+        h = Harness(self, gates=("grep -q 'value = 2' app.py",))
         h.supervisor_replies.append(reply(PLAN_AND_DISPATCH))
         h.worker_actions.append(worker_writes({"app.py": "value = 2\n"}))
         h.run.run(max_turns=1)
-        (h.run.worktree / "app.py").write_text("value = 5\n")
+        (h.run.worktree / "app.py").write_text("value = 500\n")
         sh(h.run.worktree, "git", "commit", "-qam", "regress")
         h.supervisor_replies.append(reply(actions({"op": "done", "summary": "x"})))
         state = h.run.run(max_turns=1)
@@ -582,7 +617,7 @@ class LiteRunTests(unittest.TestCase):
         self.assertEqual(state["consecutive_errors"], 0)
         self.assertIn("tried to edit", h.run.path("handoff.md").read_text())
 
-    def dispatch_models(self, *dispatches):
+    def dispatch_models(self, *dispatches, options=None):
         h = Harness(self)
         items = [{"op": "plan", "tasks": [{"id": "t%d" % i, "title": "t", "prompt": "p",
                                            "check": "true"} for i in range(len(dispatches))]}]
@@ -592,7 +627,8 @@ class LiteRunTests(unittest.TestCase):
             h.worker_actions.append(worker_writes({"f%d.txt" % index: "x\n"}))
         h.supervisor_replies.append(reply(actions(*items)))
         h.run.save("config.json", {**h.run.load("config.json"),
-                                   "workers": ["claude", "codex", "antigravity"]})
+                                   "workers": ["claude", "codex", "antigravity"],
+                                   **(options or {})})
         h.run.run(max_turns=1)
         return h, h.argvs[1:1 + len(dispatches)]
 
@@ -613,6 +649,24 @@ class LiteRunTests(unittest.TestCase):
         self.assertEqual(self.flag(argvs[5], "--model"), "claude-opus-5")
         self.assertIn("light=gemini-3.8-flash-low", h.prompts[0])
         self.assertEqual(h.plan()["t2"]["history"], ["strong:codex/gpt-6.1-sol:passed"])
+
+    def test_operator_effort_overrides_catalog_and_dispatch(self):
+        h, argvs = self.dispatch_models(
+            ("codex", "light"), ("claude", "standard"), ("antigravity", "standard"),
+            options={"worker_effort": "medium", "supervisor_effort": "high"})
+        self.assertIn('model_reasoning_effort="medium"', argvs[0])
+        self.assertEqual(self.flag(argvs[1], "--effort"), "medium")
+        self.assertNotIn("--effort", argvs[2])
+        self.assertEqual(self.flag(h.argvs[0], "--effort"), "high")
+
+    def test_operator_effort_reaches_untiered_antigravity_model(self):
+        _, argvs = self.dispatch_models(
+            ("antigravity", "standard"),
+            options={"worker_effort": "high", "catalog": [
+                {"provider": "antigravity", "tier": "standard",
+                 "model": "gemini-custom", "effort": "low"}]})
+        self.assertEqual(self.flag(argvs[0], "--model"), "gemini-custom")
+        self.assertEqual(self.flag(argvs[0], "--effort"), "high")
 
     def test_models_outside_catalog_are_refused(self):
         h, argvs = self.dispatch_models(("codex", "gpt-6-astra"),

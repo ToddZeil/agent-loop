@@ -1,0 +1,50 @@
+{
+  "max_parallel": 3,
+  "supervisor": {
+    "provider": "codex",
+    "max_interventions": 6,
+    "max_turns": 100,
+    "timeout_seconds": 300
+  },
+  "tasks": [
+    {
+      "id": "api-fix",
+      "repo": "/absolute/path/to/api-repository",
+      "base": "HEAD",
+      "goal": "Fix the pagination bug described in issue 123; preserve the existing API.",
+      "acceptance": [
+        "python3 -m unittest tests.test_pagination"
+      ],
+      "options": {
+        "worker_model": "gpt-6.1-sol",
+        "worker_idle_seconds": 900,
+        "worker_max_seconds": 14400,
+        "max_worker_tokens": 2000000,
+        "workers": [
+          "codex",
+          "claude"
+        ],
+        "worker_models": {
+          "codex": "gpt-6.1-sol",
+          "claude": "YOUR_CLAUDE_MODEL_ID"
+        },
+        "worker_effort": "medium",
+        "unknown_retry_seconds": 1800,
+        "return_to_primary": true
+      }
+    },
+    {
+      "id": "web-accessibility",
+      "repo": "/absolute/path/to/web-repository",
+      "goal": "Make the settings form keyboard accessible and cover its interaction with tests.",
+      "acceptance": [
+        "npm test -- --run settings"
+      ],
+      "options": {
+        "setup": [
+          "npm ci"
+        ]
+      }
+    }
+  ]
+}

@@ -98,7 +98,7 @@ def _validate_shape(policy, repo):
     if not isinstance(policy["models"], list):
         raise ValueError("policy.models must be a list")
     for model in policy["models"]:
-        if (not isinstance(model, dict) or model.get("provider") not in ("codex", "claude", "antigravity")
+        if (not isinstance(model, dict) or model.get("provider") not in ("codex", "claude", "antigravity", "muse")
                 or not isinstance(model.get("model"), str)
                 or model.get("effort", "low") not in ("low", "medium", "high")):
             raise ValueError("Invalid configured model")

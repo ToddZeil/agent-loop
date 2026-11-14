@@ -20,6 +20,7 @@ from .adapters import (Result, context_tokens, parse, quota_deadline,
                        supervisor_command, token_total)
 from .lite import DEFAULTS, LiteRun, changed_files, extract_verdict, git, tail
 from .storage import atomic_json
+from .usage import record as record_usage
 from .worker import process_identity, workspace_lock_path
 
 VERSION = 1
@@ -253,7 +254,8 @@ class ContinuousRun(LiteRun):
                   "log_directory": str(self.path("logs")), "prompt": self._prompt(state),
                   "session_id": state["session_id"], "worker_idle_timeout_seconds": self.config["worker_idle_seconds"],
                   "worker_max_seconds": self.config["worker_max_seconds"],
-                  "task": {"provider": state["provider"], "model": state["model"], "effort": "medium"}}
+                  "task": {"provider": state["provider"], "model": state["model"], "effort": (self.config.get("worker_effort") or "medium"),
+                           "allow_subagents": self.config.get("allow_subagents", False)}}
         path = self.path("attempts") / (attempt_id + ".json")
         atomic_json(path, record)
         state.update(state="working", attempt=attempt_id, next_action="reconcile worker")
@@ -369,7 +371,7 @@ class ContinuousRun(LiteRun):
                   "GOAL\n" + self.path("goal.md").read_text() + "\nFILES\n" + content)
         before = self._tree_fingerprint()
         try:
-            argv = supervisor_command(provider, prompt, workspace=self.worktree)
+            argv = supervisor_command(provider, prompt, effort=self.config["supervisor_effort"], workspace=self.worktree)
             code, out, err = self.invoke(argv, self.worktree, self.config["supervisor_max_seconds"],
                                          idle_timeout=self.config["supervisor_idle_seconds"])
             result = parse(provider, code, out, err, now=self.clock())
@@ -377,6 +379,8 @@ class ContinuousRun(LiteRun):
             self._wait(state, "objective reviewer unavailable: " + str(exc),
                        self.clock() + self.config["unknown_retry_seconds"])
             return False
+        record_usage(state, "reviewer", provider, result.usage, "reviewer:" + uuid.uuid4().hex,
+                     now=self.clock())
         self.account(state, "reviewer", provider, result)
         if self._tree_fingerprint() != before:
             self._wait(state, "reviewer changed worktree content")
@@ -403,6 +407,8 @@ class ContinuousRun(LiteRun):
                         payload.get("usage") or {}, payload.get("retry_at") or 0,
                         payload.get("error") or "", payload.get("estimated_usd") or 0,
                         bool(payload.get("invoked", True)))
+        record_usage(state, "worker", provider, result.usage, "worker:" + str(attempt),
+                     model=state.get("model"), now=self.clock())
         self.account(state, "worker", provider, result)
         state["tokens"][provider] = state["tokens"].get(provider, 0) + token_total(
             provider, result.usage)
@@ -412,6 +418,7 @@ class ContinuousRun(LiteRun):
         state["context_tokens"] = context_tokens(provider, result.usage)
         if state["context_tokens"] >= self.config["reset_at_tokens"]:
             state["session_id"] = None
+            state["sessions"].pop(provider, None)
             state["context_tokens"] = 0
         response = result.response.strip()
         try:
