@@ -53,6 +53,42 @@ class WebTests(unittest.IsolatedAsyncioTestCase):
     async def post(self, path, data):
         return await self.client.post(path,json=data,headers={'X-Loop-Request':'1', 'Origin':self.origin})
 
+    async def test_delete_agent_cleans_worktree_branch_history_and_allows_reuse(self):
+        task = self.manifest['tasks'][0]
+        response = await self.post('/api/supervisor/agents', {'tasks': [task]})
+        self.assertEqual(response.status, 201, await response.text())
+        entry = self.controller.supervisor()
+        run = self.controller.run_for(entry['id'], 'fix')
+        (run.worktree / 'uncommitted.txt').write_text('discard after confirmation')
+        url = '/api/supervisor/agents/fix/delete'
+        response = await self.post(url, {})
+        self.assertEqual(response.status, 400)
+        self.assertTrue(run.worktree.exists())
+        with mock.patch.object(self.controller, 'running', return_value=True):
+            response = await self.post(url, {'confirm': True})
+            self.assertEqual(response.status, 400)
+        from loop.web import locked
+        with locked(run.path('keeper.lock')):
+            response = await self.post(url, {'confirm': True})
+            self.assertEqual(response.status, 409)
+        state = run.state()
+        run.save_state({**state, 'attempt': 'active'})
+        response = await self.post(url, {'confirm': True})
+        self.assertEqual(response.status, 400)
+        run.save_state(state)
+        await self.post('/api/supervisor/agents/fix/remove', {})
+        response = await self.post(url, {'confirm': True})
+        self.assertEqual(response.status, 200, await response.text())
+        self.assertFalse(run.worktree.exists())
+        self.assertFalse(run.dir.exists())
+        self.assertTrue((self.repo / 'app.py').exists())
+        branches = subprocess.check_output(['git', '-C', str(self.repo), 'branch', '--list', run.branch], text=True)
+        self.assertEqual(branches.strip(), '')
+        spec = json.loads(self.controller.fleet(entry['id']).manifest.read_text())
+        self.assertEqual(spec['tasks'], [])
+        response = await self.post('/api/supervisor/agents', {'tasks': [task]})
+        self.assertEqual(response.status, 201, await response.text())
+
     async def test_model_catalog_and_idle_agent_model_correction(self):
         cache=self.root/'codex';cache.mkdir()
         (cache/'models_cache.json').write_text(json.dumps({'fetched_at':'today','models':[

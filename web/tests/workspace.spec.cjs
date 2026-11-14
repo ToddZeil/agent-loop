@@ -126,6 +126,42 @@ test('scan repositories, choose one, persist subagent toggle, and remove/restore
   await page.screenshot({path:path.resolve(__dirname,'../../.agent-loop/web-projects.png'),fullPage:true});
 });
 
+test('delete and clean up current and archived agents, with cancellation', async ({page,request}) => {
+  const fixture = await (await request.get('/test-fixture')).json();
+  await page.goto('/');
+  await page.evaluate(async repo => {
+    await api('/supervisor/agents', {tasks:[{id:'delete-ui',repo,goal:'Cleanup test'}]});
+    await refresh();
+  }, fixture.repo);
+  await page.locator('[data-task="delete-ui"]').click();
+  await agentSettings(page);
+  page.once('dialog', dialog => dialog.dismiss());
+  await page.locator('#delete-agent').click();
+  await expect(page.locator('[data-task="delete-ui"]')).toBeVisible();
+  await page.locator('#remove-agent').click();
+  await expect(page.locator('[data-delete="delete-ui"]')).toBeVisible();
+  page.once('dialog', async dialog => {
+    expect(dialog.message()).toContain('cannot be undone');
+    await dialog.accept();
+  });
+  await page.locator('[data-delete="delete-ui"]').click();
+  await expect(page.locator('[data-delete="delete-ui"]')).toHaveCount(0);
+  await expect(page.locator('#toast')).toContainText('Agent deleted');
+  await page.reload();
+  await expect(page.locator('[data-task="delete-ui"]')).toHaveCount(0);
+  await expect(page.locator('[data-restore="delete-ui"]')).toHaveCount(0);
+  await page.evaluate(async repo => {
+    await api('/supervisor/agents', {tasks:[{id:'delete-ui',repo,goal:'Cleanup test'}]});
+    await refresh();
+  }, fixture.repo);
+  await page.locator('[data-task="delete-ui"]').click();
+  await agentSettings(page);
+  page.once('dialog', dialog => dialog.accept());
+  await page.locator('#delete-agent').click();
+  await expect(page.locator('[data-task="delete-ui"]')).toHaveCount(0);
+  await expect(page.locator('#toast')).toContainText('Agent deleted');
+});
+
 test('local keeper is optional and can be enabled or disabled without replacing the supervisor',async ({page}) => {
   await page.goto('/');
   await page.locator('#supervisor-settings').click();
