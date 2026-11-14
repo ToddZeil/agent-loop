@@ -1,5 +1,7 @@
 'use strict';
 const $ = id => document.getElementById(id);
+const loadedUIRevision = document.querySelector('meta[name=loop-ui-revision]')?.content || '';
+$('ui-build').textContent = `UI ${loadedUIRevision || 'unknown'}`;
 const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let fleets = [], selectedFleet = localStorage.getItem('loop-fleet'), selectedTask = new URLSearchParams(location.search).get('agent');
 let events = null, snapshotEpoch = null, snapshotRevision = -1;
@@ -415,6 +417,7 @@ function applySupervisor(supervisor) {
   if ((supervisor.snapshot_revision ?? 0) < snapshotRevision) return;
   snapshotRevision = supervisor.snapshot_revision ?? 0;
   fleets = [supervisor]; selectedFleet = supervisor.id;
+  $('ui-update').hidden = !loadedUIRevision || !supervisor.ui_revision || supervisor.ui_revision === loadedUIRevision;
   $('connection').textContent = 'Live stream connected';
 }
 function renderArchived(tasks) {
@@ -498,5 +501,18 @@ $('rescan-projects').onclick = event => changeProjects({action:'rescan'},event.c
 $('add-projects').onsubmit = event => { event.preventDefault(); const data = new FormData(event.currentTarget); changeProjects({action:'add',paths:data.get('paths').split('\n').map(s=>s.trim()).filter(Boolean)},event.submitter); };
 loadProjects().catch(e => toast(e.message,true));
 selectTab(new URLSearchParams(location.search).get('tab') === 'activity' ? 'activity' : 'terminal');
-refresh().then(connectEvents);
+$('reload-interface').onclick = () => {
+  if ($('note').value) sessionStorage.setItem('loop-ui-draft', JSON.stringify({task:selectedTask,text:$('note').value}));
+  const url=new URL(location.href);
+  if(selectedTask) url.searchParams.set('agent',selectedTask);
+  url.searchParams.set('tab',activeTab); url.searchParams.set('refresh',String(Date.now()));
+  location.assign(url.href);
+};
+refresh().then(() => {
+  try {
+    const draft=JSON.parse(sessionStorage.getItem('loop-ui-draft') || 'null');
+    if(draft?.task === selectedTask) { $('note').value=draft.text; sessionStorage.removeItem('loop-ui-draft'); }
+  } catch {}
+  connectEvents();
+});
 window.addEventListener('beforeunload',()=>events?.close());

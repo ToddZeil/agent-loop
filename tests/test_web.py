@@ -114,6 +114,21 @@ class WebTests(unittest.IsolatedAsyncioTestCase):
         response=await self.post(f"/api/fleets/{entry['id']}/tasks/fix/settings",{'worker_effort':'invalid'})
         self.assertEqual(response.status,400)
 
+    async def test_ui_revision_versions_assets_and_notifies_existing_clients(self):
+        from loop.web import ui_revision
+        revision=ui_revision()
+        response=await self.client.get('/')
+        html=await response.text()
+        self.assertIn(f'/styles.css?v={revision}',html)
+        self.assertIn(f'/app.js?v={revision}',html)
+        self.assertIn(f'content="{revision}"',html)
+        self.assertEqual(response.headers['Cache-Control'],'no-store')
+        initial=(await (await self.client.get('/api/supervisor')).json())['supervisor']
+        with mock.patch('loop.web.ui_revision',return_value='new-ui-version'):
+            updated=(await (await self.client.get('/api/supervisor')).json())['supervisor']
+        self.assertEqual(updated['ui_revision'],'new-ui-version')
+        self.assertGreater(updated['snapshot_revision'],initial['snapshot_revision'])
+
     async def create(self):
         response = await self.post('/api/fleets',{'name':'Local test','manifest':self.manifest})
         self.assertEqual(response.status,201,await response.text())
