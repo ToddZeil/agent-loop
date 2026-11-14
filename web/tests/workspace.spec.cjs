@@ -563,6 +563,36 @@ test('idle agent terminal connects while its status refresh is delayed', async (
   await page.locator('#stop').click();
 });
 
+test('agent terminal shows startup feedback while the connection is delayed', async ({page}) => {
+  await page.goto('/');
+  await page.waitForFunction(() => typeof currentTask === 'function' && currentTask());
+  await page.getByRole('tab',{name:'Agent terminal',exact:true}).click();
+  let release; const gate = new Promise(resolve => { release = resolve; });
+  await page.routeWebSocket(/\/terminal\?mode=agent/, async ws => {
+    await gate;
+    const server = ws.connectToServer();
+    void server;
+  });
+  const visible = () => page.evaluate(() => Array.from({length:terminal.buffer.active.length},(_,i)=>terminal.buffer.active.getLine(i)?.translateToString()||'').join('\n'));
+  try {
+    await page.locator('#open-native').click();
+    await page.waitForFunction(() => window.terminal && socket && socket.readyState === WebSocket.CONNECTING);
+    await expect(page.locator('#native-placeholder')).toBeHidden();
+    await expect(page.locator('#native-terminal')).toBeVisible();
+    await expect(page.locator('#native-terminal .xterm-rows')).toContainText('Starting agent CLI…');
+    expect(await visible()).not.toContain('Codex interactive terminal');
+    await expect(page.locator('#native-status')).not.toContainText('Connected');
+  } finally { release(); }
+  await expect(page.locator('#native-status')).toContainText('Connected',{timeout:20000});
+  await page.locator('#native-terminal .xterm-helper-textarea').focus();
+  await page.keyboard.type('after delay');
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => terminal && Array.from({length:terminal.buffer.active.length},(_,i)=>terminal.buffer.active.getLine(i)?.translateToString()||'').join('\n').includes('Codex reply: after delay'));
+  await page.locator('#return-native').click();
+  await expect(page.locator('#task-status')).toHaveText('complete',{timeout:20000});
+  await page.locator('#stop').click();
+});
+
 test('active worker yields its terminal only after the current turn', async ({page,request}) => {
   const fixture=await (await request.get('/test-fixture')).json();
   await page.goto('/');
@@ -579,7 +609,11 @@ test('active worker yields its terminal only after the current turn', async ({pa
   expect((await (await response).json()).native_ready).toBe(false);
   await expect(page.locator('#native-status')).toContainText('Waiting for the current worker turn');
   expect(await page.evaluate(() => !!socket)).toBe(false);
+  await expect(page.locator('#native-placeholder')).toBeVisible();
+  await expect(page.locator('#native-placeholder h3')).toHaveText('Waiting for the current turn to finish…');
   await expect(page.locator('#native-status')).toContainText('Connected',{timeout:20000});
+  await expect(page.locator('#native-placeholder')).toBeHidden();
+  await page.waitForFunction(() => terminal && Array.from({length:terminal.buffer.active.length},(_,i)=>terminal.buffer.active.getLine(i)?.translateToString()||'').join('\n').includes('Starting agent CLI…'));
   await page.locator('#native-terminal .xterm-helper-textarea').focus();
   await page.keyboard.type('after handoff');
   await page.keyboard.press('Enter');

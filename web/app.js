@@ -211,6 +211,12 @@ function render() {
   $('return-native').disabled=!task.terminal_requested;
   const recovery=task.native_session_id ? 'chat saved for recovery' : ['codex','claude'].includes(task.native_provider) ? 'chat ID pending' : 'save the chat ID for restart recovery';
   $('native-status').textContent=nativeConnected ? `Connected · ${task.native_provider} · ${recovery} · direct keyboard input` : task.terminal_requested && !task.native_ready && !task.terminal_open ? 'Waiting for the current worker turn to finish…' : task.terminal_requested ? `Agent paused · ${recovery}` : 'Direct CLI access';
+  const ph=$('native-placeholder');
+  if(ph && !nativeConnected) {
+    const waiting=task.terminal_requested && !task.native_ready && !task.terminal_open, starting=task.terminal_requested && !waiting && !socket;
+    ph.querySelector('h3').textContent=waiting ? 'Waiting for the current turn to finish…' : starting ? 'Starting the CLI…' : 'Talk directly to your CLI.';
+    ph.querySelector('p').textContent=waiting ? 'The terminal opens automatically as soon as the worker reaches a turn boundary.' : starting ? 'Connecting to the interactive session.' : 'Opens after the current turn and resumes the saved session when available.';
+  }
   if(!nativeReturning && (nativeAutoAttach === `${selectedFleet}/${selectedTask}` || (activeTab === 'native' && task.terminal_requested && !socket)) && (task.native_ready || (task.terminal_open && task.terminal_mode !== 'shell'))) {
     nativeAutoAttach=null; const takeover=nativeTakeover === `${selectedFleet}/${selectedTask}`;nativeTakeover=null;connectTerminal('agent',takeover).catch(e=>toast(e.message,true));
   }
@@ -444,6 +450,7 @@ async function connectTerminal(mode='shell',takeover=false) {
   terminal = new Terminal({cursorBlink:true,fontFamily:'Menlo, ui-monospace, monospace',fontSize:12,scrollback:3000,theme:{background:'#0b0e0c',foreground:'#d2e0ce',cursor:'#c5f47b',selectionBackground:'#5b784755'}});
   fit = new FitAddon.FitAddon(); terminal.loadAddon(fit); terminal.open(mount); fit.fit();
   terminalKey = `${selectedFleet}/${selectedTask}`;
+  if(mode === 'agent') terminal.writeln('Starting agent CLI…');
   socket = new WebSocket(`ws://${location.host}/api${taskURL()}/terminal?mode=${mode}${takeover ? '&takeover=1' : ''}`); socket.binaryType = 'arraybuffer';
   const ws = socket;
   ws.onopen = () => { nativeReconnectAttempts=0; $('terminal-state').textContent = mode === 'agent' ? '● Connected · agent' : '● Connected · local shell'; ws.send(JSON.stringify({type:'resize',cols:terminal.cols,rows:terminal.rows})); terminal.focus(); refresh(); };
