@@ -336,6 +336,10 @@ test('desktop opens directly to a readable conversation with its composer in vie
   await expect(page.locator('#worker-terminal-output')).toContainText('Ready for design review.');
   await expect(page.getByRole('tab',{name:'Conversation',exact:true})).toHaveAttribute('aria-selected','true');
   expect(await page.locator('#agent-settings').getAttribute('open')).toBeNull();
+  await expect(page.locator('.agent-model-settings [data-model-picker]')).toBeVisible();
+  await expect(page.locator('#agent-effort')).toBeVisible();
+  await page.locator('.agent-model-settings .model-refresh').click();
+  await expect(page.locator('#toast')).toContainText('Model catalogue refreshed.');
   expect(await page.locator('#token-details').getAttribute('open')).toBeNull();
   const composer=await page.locator('#note-form').boundingBox();
   expect(composer.y+composer.height).toBeLessThanOrEqual(1000);
