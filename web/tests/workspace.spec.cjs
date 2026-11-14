@@ -765,3 +765,22 @@ test('theme switch persists and remains available on mobile', async ({page}) => 
   await page.reload();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
 });
+
+test('Claude models can be selected when creating an agent', async ({page,request}) => {
+  const fixture = await (await request.get('/test-fixture')).json();
+  await page.goto('/');
+  await page.locator('#new-fleet').click();
+  await page.locator('#task-fields [data-field=provider]').selectOption('claude');
+  const picker = page.locator('#task-fields [data-model-picker]');
+  await expect(picker.locator('option[value="sonnet"]')).toBeAttached();
+  await picker.selectOption('sonnet');
+  await page.getByLabel('Repository root',{exact:true}).fill(fixture.repo);
+  await page.getByLabel('Goal',{exact:true}).fill('Create a Claude agent for this project.');
+  await page.getByRole('button',{name:'Add & start supervisor'}).click();
+  await expect(page.locator('#create-dialog')).toBeHidden();
+  await expect.poll(async () => (await (await page.request.get('/api/supervisor')).json()).supervisor.tasks.find(t => t.goal === 'Create a Claude agent for this project.')?.provider).toBe('claude');
+  const task = (await (await page.request.get('/api/supervisor')).json()).supervisor.tasks.find(t => t.goal === 'Create a Claude agent for this project.');
+  expect(task.model).toBe('sonnet');
+  await expect(page.locator('#task-status')).toHaveText('complete', {timeout:20000});
+  await expect(page.locator('#worker-terminal-output')).toContainText('Updated app.py');
+});

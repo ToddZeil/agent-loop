@@ -123,7 +123,7 @@ class WebTests(unittest.IsolatedAsyncioTestCase):
             (cache/'models_cache.json').unlink()
             data=await (await self.client.get('/api/models')).json()
             self.assertEqual(data['providers']['codex']['models'][0]['id'],'exact-model-id')
-            self.assertEqual(data['providers']['claude']['models'][0]['id'],'custom-claude')
+            self.assertIn('custom-claude', [model['id'] for model in data['providers']['claude']['models']])
         entry=await self.create()
         run=self.controller.run_for(entry['id'],'fix')
         state=run.state();state.update(state='waiting',retry_at=123,model='bad',session_id='old')

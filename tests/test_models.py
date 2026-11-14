@@ -25,6 +25,12 @@ class ModelCatalogTests(unittest.TestCase):
         return {'slug': name, 'display_name': name.upper(), 'visibility': visibility,
                 'supported_reasoning_levels': [{'effort': 'high'}]}
 
+    def test_claude_aliases_are_available_without_discovery_and_survive_refresh(self):
+        for _ in range(2):
+            result = catalog(self.home)['claude']
+            self.assertEqual([m['id'] for m in result['models']], ['sonnet', 'opus', 'haiku'])
+            self.assertEqual(result['source'], 'Claude Code model aliases')
+
     def test_smaller_cache_retains_discovered_choices_and_effort(self):
         self.write([self.row('model-a'), self.row('model-b')])
         catalog(self.home)
@@ -56,4 +62,4 @@ class ModelCatalogTests(unittest.TestCase):
         self.write([self.row('model-a')])
         result = catalog(self.home)
         self.assertFalse(result['codex']['models'][0]['custom'])
-        self.assertEqual(result['claude']['models'][0]['id'], 'custom-claude')
+        self.assertIn('custom-claude', [m['id'] for m in result['claude']['models']])

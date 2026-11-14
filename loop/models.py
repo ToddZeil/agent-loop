@@ -7,6 +7,13 @@ from .storage import atomic_json
 
 PROVIDERS = ('codex', 'claude', 'antigravity', 'muse')
 
+# Claude Code resolves these aliases to the models available to the account.
+CLAUDE_MODELS = [
+    {'id': 'sonnet', 'label': 'Claude Sonnet', 'custom': False},
+    {'id': 'opus', 'label': 'Claude Opus', 'custom': False},
+    {'id': 'haiku', 'label': 'Claude Haiku', 'custom': False},
+]
+
 
 def catalog(home):
     path = Path(home) / 'models.json'
@@ -22,6 +29,10 @@ def catalog(home):
         entries = entry.get('models', []) if isinstance(entry, dict) else []
         result[provider]['models'] = [m for m in entries if isinstance(m, dict)
                                       and isinstance(m.get('id'), str) and (provider == 'codex' or m.get('custom'))]
+    saved_claude = result['claude']['models']
+    builtin_ids = {m['id'] for m in CLAUDE_MODELS}
+    result['claude'].update(models=[*CLAUDE_MODELS, *[m for m in saved_claude if m['id'] not in builtin_ids]],
+                            source='Claude Code model aliases')
     previous = result['codex']['models']
     cache = Path(os.environ.get('CODEX_HOME', str(Path.home() / '.codex'))) / 'models_cache.json'
     try:

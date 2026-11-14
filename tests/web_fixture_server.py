@@ -62,6 +62,15 @@ print(json.dumps({'item':{'type':'agent_message','text':text}}))
 print(json.dumps({'type':'turn.completed','usage':usage}))
 ''')
     fake.chmod(0o755)
+    claude = bindir/'claude'
+    claude.write_text("""#!/usr/bin/env python3
+import json, sys
+from pathlib import Path
+assert sys.argv[sys.argv.index('--model') + 1] == 'sonnet'
+Path('app.py').write_text('value = 2\\n')
+print(json.dumps({'type':'result', 'is_error':False, 'result':'Updated app.py', 'session_id':'claude-browser-session'}))
+""")
+    claude.chmod(0o755)
     codexhome=root/'codex-home';codexhome.mkdir()
     import json
     (codexhome/'models_cache.json').write_text(json.dumps({'models':[
