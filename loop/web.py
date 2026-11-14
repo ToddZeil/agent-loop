@@ -3,6 +3,7 @@ import argparse
 import asyncio
 from contextlib import ExitStack
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -29,6 +30,13 @@ ASSETS = ROOT / 'web'
 APP_KEY = web.AppKey('controller', object)
 COOKIE = 'agent_loop_local'
 MAX_BUFFER = 256 * 1024
+
+
+def ui_revision():
+    digest = hashlib.sha256()
+    for name in ('index.html', 'styles.css', 'app.js'):
+        digest.update((ASSETS / name).read_bytes())
+    return digest.hexdigest()[:10]
 
 
 def locked(path):
@@ -255,6 +263,7 @@ class Controller:
         supervisor_totals = combine_usage(t['usage']['supervisor'] for t in result['tasks'])
         result['usage'] = {'agents': agent_totals, 'supervisor': supervisor_totals,
                            'total': combine_usage([agent_totals, supervisor_totals])}
+        result['ui_revision'] = ui_revision()
         result.update(keeper=spec.get('keeper', {'enabled': False}), max_parallel=spec['max_parallel'],
                       desired_running=spec.get('desired_running', False),
                       supervisor_busy=shared.get('busy') if result['running'] else None)
@@ -472,7 +481,12 @@ async def boundary(request, handler):
 
 
 async def index(request):
-    response = web.FileResponse(ASSETS / 'index.html')
+    revision = ui_revision()
+    html = (ASSETS / 'index.html').read_text()
+    html = html.replace('href="/styles.css"', f'href="/styles.css?v={revision}"')
+    html = html.replace('src="/app.js"', f'src="/app.js?v={revision}"')
+    html = html.replace('</head>', f'<meta name="loop-ui-revision" content="{revision}"></head>')
+    response = web.Response(text=html, content_type='text/html')
     response.set_cookie(COOKIE, request.app[APP_KEY].token, httponly=True, samesite='Strict')
     return response
 

@@ -71,8 +71,7 @@ test('add another agent to the running supervisor through advanced manifest; mob
   expect(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth)).toBe(false);
   const cards = page.locator('.worker-card');
   await expect(cards).toHaveCount(2);
-  const first = await cards.nth(0).boundingBox();
-  const second = await cards.nth(1).boundingBox();
+  const [first,second] = await cards.evaluateAll(elements=>elements.map(element=>{const rect=element.getBoundingClientRect();return {x:rect.x,y:rect.y,height:rect.height};}));
   expect(second.y).toBeGreaterThanOrEqual(first.y + first.height);
   expect(Math.abs(first.x - second.x)).toBeLessThan(1);
   await page.screenshot({path:path.resolve(__dirname,'../../.agent-loop/web-mobile.png'),fullPage:true});
@@ -290,4 +289,28 @@ test('effort is selectable for new and existing agents and supervisor; parallel 
   await page.locator('#supervisor-dialog [data-close]').click();
   await page.locator('#view-worker-terminal').click();
   await page.screenshot({path:path.resolve(__dirname,'../../.agent-loop/web-conversation-effort.png'),fullPage:true});
+});
+
+
+test('open tabs report their UI revision and offer safe reload when files change',async ({page,request})=>{
+  const fixture=await (await request.get('/test-fixture')).json();
+  await page.goto('/');
+  await page.locator('#new-fleet').click();
+  await page.getByLabel('Repository root',{exact:true}).fill(fixture.repo);
+  await page.getByLabel('Goal',{exact:true}).fill('Verify interface reload.');
+  await page.getByRole('button',{name:'Add agents',exact:true}).click();
+  await expect(page.locator('#ui-build')).toHaveText(/^UI [a-f0-9]{10}$/);
+  await expect(page.locator('#ui-update')).toBeHidden();
+  const url=await page.locator('script[src*="app.js"]').getAttribute('src');
+  expect(url).toMatch(/app\.js\?v=[a-f0-9]{10}/);
+  const state=(await (await page.request.get('/api/supervisor')).json()).supervisor;
+  const agentId=await page.locator('#task-title').textContent();
+  await page.route('**/api/events',route=>route.fulfill({status:200,contentType:'text/event-stream',body:'event: state\ndata: '+JSON.stringify({...state,snapshot_revision:state.snapshot_revision+1,ui_revision:'different'})+'\n\n'}));
+  await page.goto('/?agent='+encodeURIComponent(agentId));
+  await expect(page.getByRole('button',{name:'Reload interface',exact:true})).toBeVisible();
+  await page.getByLabel('Give this worker direction',{exact:true}).fill('Keep this unsent draft.');
+  await page.unroute('**/api/events');
+  await page.getByRole('button',{name:'Reload interface',exact:true}).click();
+  await expect(page.getByLabel('Give this worker direction',{exact:true})).toHaveValue('Keep this unsent draft.');
+  await expect(page.locator('#ui-update')).toBeHidden();
 });

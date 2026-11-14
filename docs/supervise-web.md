@@ -242,3 +242,12 @@ files. Their changes stay on their own worktree branches; restarting a server do
 apply them to the checkout serving the app. Integrate and test the desired changes in
 the serving checkout, commit, and push that branch before starting workers that need
 those features. Existing worker worktrees keep their own history.
+
+## Identifying the interface in an open tab
+
+The sidebar shows an **UI** revision derived from the served HTML, CSS, and JavaScript.
+Asset URLs include that revision so a refreshed page fetches the matching files. When
+those files change, existing tabs receive an **Updated interface available** notice.
+**Reload interface** preserves the selected worker and any unsent worker-message draft.
+The app does not reload an active tab automatically. Worktree previews on another port
+still serve their own checkout; a revision notice does not merge worktree changes.
