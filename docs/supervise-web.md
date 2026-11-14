@@ -80,13 +80,13 @@ for those CLIs is not implemented. Choose **Custom model ID…** to save another
 A saved custom ID is not a guarantee of account access.
 
 Unsupported-model errors block for correction rather than retrying on a quota timer.
-To correct an existing agent, stop scheduling, let its current turn finish, and choose
-its visible **Agent model**, and click **Save model**. Start the supervisor again to retry. This clears
+To correct an existing agent, stop scheduling, let its current turn finish, open
+**Agent settings**, choose an **Agent model**, and click **Save model**. Start the supervisor again to retry. This clears
 the old worker session and preserves the worktree, goal, and usage history.
 
 ## Effort settings
 
-**Worker effort** is available in Add agents and beside **Agent model** in the selected worker.
+**Worker effort** is available in Add agents and beside **Agent model** in the selected worker's **Agent settings**.
 **Save effort** applies changes to the next worker turn without discarding its worktree
 or session. **Supervisor effort** is in Supervisor settings and applies to both questions
 and objective reviews. The model catalogue supplies Codex's advertised effort levels;
@@ -257,7 +257,10 @@ compact; token breakdowns, agent settings, and the separate worktree shell are e
 Use **Find an agent** to filter a long worker list. The message composer remains in view on
 desktop, and Cmd+Enter (Ctrl+Enter on other systems) sends the next-turn message.
 
-Model and effort selectors remain visible above the conversation. Use **↻** beside a model
+Open **Agent settings** for model, effort, worktree, and subagent controls.
+**Conversation** is the first tab; use Left/Right arrows to move between tabs and Home/End
+to jump to the first/last tab. Removed agents appear in the sidebar only when available
+to restore. Use **↻** beside a model
 picker to refresh its catalogue. A smaller Codex cache no longer deletes previously seen
 choices; those entries are labelled **previously seen**, which does not guarantee current
 account access. Entries explicitly marked hidden by the CLI are excluded.

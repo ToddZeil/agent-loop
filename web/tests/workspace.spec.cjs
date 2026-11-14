@@ -8,6 +8,7 @@ test('one supervisor: add an agent, use a real terminal, send direction, and com
   const errors=[];page.on('pageerror',error=>errors.push(error.message));
   const fixture=await (await request.get('/test-fixture')).json();
   await page.goto('/');
+  await expect(page.locator('#removed-agents')).toBeHidden();
   await page.getByRole('button',{name:'Add your first agent'}).click();
   await optionalSettings(page);
   await page.getByLabel('Agent ID',{exact:true}).fill('browser-fix');
@@ -43,7 +44,7 @@ test('one supervisor: add an agent, use a real terminal, send direction, and com
   await page.getByRole('tab',{name:'Run log',exact:true}).click();
   await expect(page.locator('#activity')).toContainText('Updated app.py');
   await expect(page.locator('#manager-state')).toContainText('running');
-  await page.locator('#view-worker-terminal').click();
+  await page.getByRole('tab',{name:'Conversation',exact:true}).click();
   await expect(page.locator('#worker-terminal-output')).toContainText('Updated app.py');
   await expect(page.locator('#worker-terminal-output .conversation-text strong').first()).toHaveText('Updated app.py');
   const command = page.locator('#worker-terminal-output .command-card').filter({hasText:'python3 -c check_value'}).first();
@@ -240,7 +241,7 @@ test('terminal shows live worker output during an active turn without opening a 
   await page.getByLabel('Repository root',{exact:true}).fill(fixture.repo);
   await page.getByLabel('Goal',{exact:true}).fill('WATCH_WORKER_OUTPUT: set value to 2.');
   await page.getByRole('button',{name:'Add & start supervisor'}).click();
-  await page.locator('#view-worker-terminal').click();
+  await page.getByRole('tab',{name:'Conversation',exact:true}).click();
   await expect(page.locator('#worker-terminal-output')).toContainText('Worker is running; live output is available.');
   await expect(page.locator('#task-status')).toHaveText('working');
   await expect(page.locator('#open-terminal')).toBeDisabled();
@@ -296,7 +297,7 @@ test('effort is selectable for new and existing agents and supervisor; parallel 
   await page.locator('#supervisor-settings').click();
   await expect(page.getByLabel('Unlimited parallel workers',{exact:true})).toBeChecked();
   await page.locator('#supervisor-dialog [data-close]').click();
-  await page.locator('#view-worker-terminal').click();
+  await page.getByRole('tab',{name:'Conversation',exact:true}).click();
   await page.screenshot({path:path.resolve(__dirname,'../../.agent-loop/web-conversation-effort.png'),fullPage:true});
 });
 
@@ -328,28 +329,85 @@ test('open tabs report their UI revision and offer safe reload when files change
 test('desktop opens directly to a readable conversation with its composer in view',async ({page,request})=>{
   const fixture=await (await request.get('/test-fixture')).json();
   await page.goto('/');
+  await expect(page.locator('#connection')).toHaveText('Live stream connected');
+  const initialWorkerCount = await page.locator('.worker-card').count();
+  await page.screenshot({path:path.resolve(__dirname,'../../.agent-loop/web-redesign-empty.png'),fullPage:true});
   await page.locator('#new-fleet').click();
   await page.getByLabel('Repository root',{exact:true}).fill(fixture.repo);
   await page.getByLabel('Goal',{exact:true}).fill('Ready for design review.');
+  await page.locator('#add-task').click();
+  await page.getByLabel('Repository root',{exact:true}).nth(1).fill(fixture.secondRepo);
+  await page.getByLabel('Goal',{exact:true}).nth(1).fill('Review a second project.');
   await page.getByRole('button',{name:'Add agents',exact:true}).click();
   await expect(page.locator('#create-dialog')).toBeHidden();
   await expect(page.locator('#worker-terminal-output')).toContainText('Ready for design review.');
   await expect(page.getByRole('tab',{name:'Conversation',exact:true})).toHaveAttribute('aria-selected','true');
+  const conversationTab = page.getByRole('tab',{name:'Conversation',exact:true});
+  await expect(page.getByRole('tab').first()).toHaveText('Conversation');
+  await conversationTab.focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(page.getByRole('tab',{name:'Run log',exact:true})).toBeFocused();
+  await expect(page.getByRole('tabpanel',{name:'Run log',exact:true})).toBeVisible();
+  await page.keyboard.press('End');
+  await expect(page.getByRole('tab',{name:'Decisions',exact:true})).toBeFocused();
+  await page.keyboard.press('ArrowRight');
+  await expect(conversationTab).toBeFocused();
+  await page.keyboard.press('ArrowLeft');
+  await expect(page.getByRole('tab',{name:'Decisions',exact:true})).toBeFocused();
+  await page.keyboard.press('Home');
+  await expect(conversationTab).toBeFocused();
+  await expect(page.getByRole('tabpanel',{name:'Conversation',exact:true})).toBeVisible();
   expect(await page.locator('#agent-settings').getAttribute('open')).toBeNull();
+  await expect(page.locator('.agent-model-settings [data-model-picker]')).toBeHidden();
+  await expect(page.locator('#agent-effort')).toBeHidden();
+  await agentSettings(page);
   await expect(page.locator('.agent-model-settings [data-model-picker]')).toBeVisible();
   await expect(page.locator('#agent-effort')).toBeVisible();
   await page.locator('.agent-model-settings .model-refresh').click();
   await expect(page.locator('#toast')).toContainText('Model catalogue refreshed.');
+  await page.locator('#agent-settings > summary').click();
   expect(await page.locator('#token-details').getAttribute('open')).toBeNull();
   const composer=await page.locator('#note-form').boundingBox();
   expect(composer.y+composer.height).toBeLessThanOrEqual(1000);
+  await expect(page.locator('.worker-card')).toHaveCount(initialWorkerCount + 2);
+  await page.screenshot({path:path.resolve(__dirname,'../../.agent-loop/web-redesign-desktop.png'),fullPage:true});
   await page.getByLabel('Find agents',{exact:true}).fill('Ready for design review');
   await expect(page.locator('.worker-card')).toHaveCount(1);
-  await page.screenshot({path:path.resolve(__dirname,'../../.agent-loop/web-redesign-desktop.png'),fullPage:true});
-  await page.setViewportSize({width:390,height:844});
-  await expect(page.locator('#worker-terminal-output')).toBeVisible();
-  expect(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth)).toBe(false);
-  await page.screenshot({path:path.resolve(__dirname,'../../.agent-loop/web-redesign-mobile.png'),fullPage:true});
+  await page.getByLabel('Find agents',{exact:true}).clear();
+  await expect(page.locator('.worker-card')).toHaveCount(initialWorkerCount + 2);
+  for (const width of [390, 320]) {
+    await page.setViewportSize({width,height:844});
+    await expect(page.locator('#worker-terminal-output')).toBeVisible();
+    const agentList = await page.locator('.agent-list').boundingBox();
+    const inspector = await page.locator('.inspector').boundingBox();
+    expect(inspector.y, `Inspector follows the agent list at ${width}px`).toBeGreaterThanOrEqual(agentList.y + agentList.height);
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth)).toBe(false);
+    await page.screenshot({path:path.resolve(__dirname,`../../.agent-loop/web-redesign-mobile-${width}.png`),fullPage:true});
+    await agentSettings(page);
+    await expect(page.locator('#agent-effort')).toBeVisible();
+    await page.screenshot({path:path.resolve(__dirname,`../../.agent-loop/web-redesign-settings-${width}.png`),fullPage:true});
+    await page.locator('#agent-settings > summary').click();
+  }
+  for (const width of [1440, 390, 320]) {
+    await page.setViewportSize({width,height:width === 1440 ? 1000 : 844});
+    for (const [trigger, dialog] of [['new-fleet','create-dialog'], ['supervisor-settings','supervisor-dialog'], ['projects','projects-dialog']]) {
+      await page.locator('#'+trigger).click();
+      const modal = page.locator('#'+dialog);
+      await expect(modal).toBeVisible();
+      expect(await modal.evaluate(element=>element.scrollWidth > element.clientWidth)).toBe(false);
+      await page.screenshot({path:path.resolve(__dirname,`../../.agent-loop/web-redesign-${dialog}-${width}.png`),fullPage:true});
+      const action = modal.locator('.dialog-foot button').last();
+      if (await action.count()) {
+        await action.scrollIntoViewIfNeeded();
+        const box = await action.boundingBox();
+        expect(box.y).toBeGreaterThanOrEqual(0);
+        expect(box.y + box.height).toBeLessThanOrEqual(page.viewportSize().height);
+        await page.screenshot({path:path.resolve(__dirname,`../../.agent-loop/web-redesign-${dialog}-actions-${width}.png`)});
+      }
+      await modal.locator('[data-close]').click();
+      await expect(modal).toBeHidden();
+    }
+  }
 });
 
 
