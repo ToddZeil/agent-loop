@@ -266,3 +266,51 @@ dialog label { display: block; font-size: 11px; color: #a1b39e; margin-top: 16px
 .agent-card-actions button.danger { color: #e4b59f; }
 .agent-card-actions button:disabled { opacity: .5; cursor: default; }
 .cleanup-status { color: #e4b59f; font-size: 12px; overflow-wrap: anywhere; }
+
+/* Light palette for the workspace; terminals keep their high-contrast CLI palette. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f5f7f3; --surface: #fff; --raised: #edf2ec; --line: #d4ddd3;
+  --text: #203126; --muted: #596c5d; --accent: #386d2e; --orange: #87520d;
+}
+[data-theme="light"] input, [data-theme="light"] select, [data-theme="light"] textarea { background: #fff; border-color: #bdcbbd; }
+[data-theme="light"] .button { background: #edf2eb; border-color: #bdcbbd; }
+[data-theme="light"] .button:hover:not(:disabled) { background: #dfe9dc; border-color: #8ba58a; }
+[data-theme="light"] .button.primary { background: #386d2e; border-color: #386d2e; color: #fff; }
+[data-theme="light"] .button.primary:hover:not(:disabled) { background: #285924; }
+[data-theme="light"] .button.quiet { background: transparent; border-color: transparent; color: #415947; }
+[data-theme="light"] .button.danger, [data-theme="light"] .agent-card-actions button.danger, [data-theme="light"] .cleanup-status { color: #99452e; }
+[data-theme="light"] .sidebar { background: #edf2eb; border-color: var(--line); }
+[data-theme="light"] .brand-icon { color: #fff; }
+[data-theme="light"] .local, [data-theme="light"] .sidebar-bottom, [data-theme="light"] .sidebar-bottom small, [data-theme="light"] footer { color: var(--muted); }
+[data-theme="light"] .stats, [data-theme="light"] .inspector, [data-theme="light"] .conversation, [data-theme="light"] .worker-card { background: #fff; border-color: var(--line); }
+[data-theme="light"] .worker-card:hover, [data-theme="light"] .worker-card.selected { background: #eaf3e7; border-color: #83aa7c; }
+[data-theme="light"] .worker-card .repo, [data-theme="light"] .worker-bottom, [data-theme="light"] .worker-bottom .model { color: var(--muted); border-color: var(--line); }
+[data-theme="light"] .worker-card .goal, [data-theme="light"] .conversation-text, [data-theme="light"] .conversation-text strong { color: var(--text); }
+[data-theme="light"] .agent-search input, [data-theme="light"] .agent-model-settings, [data-theme="light"] .tabs, [data-theme="light"] .token-panel, [data-theme="light"] .agent-token-grid>div, [data-theme="light"] .note-form, [data-theme="light"] .decision { background: #edf3eb; border-color: var(--line); }
+[data-theme="light"] .agent-settings, [data-theme="light"] .shell-settings, [data-theme="light"] .token-monitor { border-color: var(--line); }
+[data-theme="light"] .agent-settings>summary, [data-theme="light"] .shell-settings>summary, [data-theme="light"] .tab, [data-theme="light"] .worker-output-heading strong, [data-theme="light"] .worker-output-heading .muted, [data-theme="light"] .conversation-role, [data-theme="light"] .conversation-role span, [data-theme="light"] .note-form>label, [data-theme="light"] .note-form>small { color: var(--muted); }
+[data-theme="light"] .tab.active, [data-theme="light"] .token-monitor strong { color: var(--accent); }
+[data-theme="light"] .note-form textarea { background: #fff; border-color: #bdcbbd; }
+[data-theme="light"] .user-message { background: #e3efdf; }
+[data-theme="light"] .command-card, [data-theme="light"] .conversation-text .message-code { background: #f2f6f0; border-color: var(--line); color: var(--text); }
+[data-theme="light"] .command-card code, [data-theme="light"] .command-card pre, [data-theme="light"] .conversation-text code { color: #365638; background: #e4eee1; border-color: var(--line); }
+[data-theme="light"] .activity { background: #f4f7f2; color: #304b32; }
+[data-theme="light"] .pill { color: #46594a; border-color: #c2d0c1; background: #edf2eb; }
+[data-theme="light"] .pill.working, [data-theme="light"] .pill.supervisor, [data-theme="light"] .pill.verifying, [data-theme="light"] .pill.complete { color: #285f32; border-color: #a8c9a5; background: #e3f1df; }
+[data-theme="light"] .pill.blocked, [data-theme="light"] .pill.waiting, [data-theme="light"] .pill.quota, [data-theme="light"] .pill.handoff { color: #80500c; border-color: #ddc58e; background: #fff3d7; }
+[data-theme="light"] .pill.interactive { color: #285b79; background: #e4f2f9; border-color: #a8c6d5; }
+[data-theme="light"] .empty { border-color: #b5cbb2; background: radial-gradient(ellipse at top,#e3f0df,transparent 65%); }
+[data-theme="light"] .empty-icon { background: #dcebd8; }
+[data-theme="light"] dialog { background: #fff; border-color: #bdcbbd; box-shadow: 0 24px 90px #233b2333; }
+[data-theme="light"] dialog label { color: #415947; }
+[data-theme="light"] .task-fields, [data-theme="light"] .task-options { background: #f5f8f3; border-color: var(--line); }
+[data-theme="light"] .form-error { color: #a13720; }
+[data-theme="light"] .model-refresh, [data-theme="light"] .agent-card-menu summary, [data-theme="light"] .agent-card-actions { background: #edf3eb; border-color: #bdcbbd; color: var(--text); }
+[data-theme="light"] .agent-card-actions button:hover { background: #dfe9dc; }
+[data-theme="light"] .model-picker-status { color: var(--muted); }
+/* The interactive terminal canvas remains dark, including its surrounding controls. */
+[data-theme="light"] .native-panel { color: #e8eeea; }
+[data-theme="light"] .native-toolbar .button { color: #e8eeea; background: #222b25; border-color: #52654c; }
+[data-theme="light"] .native-toolbar .button.primary { color: #fff; background: #386d2e; }
+[data-theme="light"] .native-options input, [data-theme="light"] .native-options select { color: #e8eeea; background: #111813; }

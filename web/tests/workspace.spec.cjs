@@ -673,3 +673,23 @@ test('merge and redeploy submits the selected worktree and exposes job progress'
   await expect(page.locator('#deploy-status')).toContainText('delete and clean up agents');
   await expect(page.locator('#deploy-log')).toHaveAttribute('href','/api/deploy/jobs/0123456789abcdef/log');
 });
+
+test('theme switch persists and remains available on mobile', async ({page}) => {
+  await page.goto('/');
+  const toggle = page.locator('#theme-toggle');
+  await expect(toggle).toHaveAccessibleName('Switch to light mode');
+  await toggle.click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  await expect(toggle).toHaveAccessibleName('Switch to dark mode');
+  await page.reload();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  await page.locator('#new-fleet').click();
+  await expect(page.locator('#create-dialog')).toBeVisible();
+  await page.locator('[data-close="create-dialog"]').click();
+  await page.setViewportSize({width: 390, height: 844});
+  await expect(toggle).toBeVisible();
+  await toggle.click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await page.reload();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+});
