@@ -8,7 +8,7 @@ let events = null, snapshotEpoch = null, snapshotRevision = -1;
 let activeTab = 'terminal', refreshing = false, taskNumber = 0;
 let savedProjects = [], savedFolders = [];
 let terminal = null, fit = null, socket = null, terminalKey = null, toastTimer;
-let terminalMode = null, nativeAutoAttach = null, nativeReconnectAttempts = 0, nativeReturning = false;
+let terminalMode = null, nativeAutoAttach = null, nativeReconnectAttempts = 0, nativeReturning = false, nativeTakeover = null;
 function toast(message, error = false) {
   $('toast').textContent = message; $('toast').classList.toggle('error', error); $('toast').hidden = false;
   clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').hidden = true, error ? 8000 : 4000);
@@ -180,13 +180,14 @@ function render() {
     $('native-custom').hidden=$('native-program').value !== 'custom';
   }
   for(const id of ['native-program','native-command','native-resume']) $(id).disabled=!!task.terminal_requested;
-  $('open-native').disabled=nativeConnected || (task.terminal_requested && !task.native_ready && !task.terminal_open);
-  $('open-native').textContent=nativeConnected ? 'Connected to agent' : task.terminal_open && task.terminal_mode !== 'shell' ? 'Reconnect agent' : task.terminal_requested && !task.native_ready ? 'Waiting for current turn…' : task.native_session_id ? 'Resume agent chat' : 'Open Agent terminal';
+  $('open-native').disabled=socket?.readyState === WebSocket.CONNECTING;
+  $('restart-native').disabled=!task.terminal_requested || !!task.attempt;
+  $('open-native').textContent=nativeConnected ? 'Show terminal' : task.terminal_open && task.terminal_mode !== 'shell' ? 'Reconnect here' : task.terminal_requested && !task.native_ready ? 'Waiting for current turn…' : task.native_session_id ? 'Resume agent chat' : 'Open Agent terminal';
   $('return-native').disabled=!task.terminal_requested;
   const recovery=task.native_session_id ? 'chat saved for recovery' : ['codex','claude'].includes(task.native_provider) ? 'chat ID pending' : 'save the chat ID for restart recovery';
   $('native-status').textContent=nativeConnected ? `Connected · ${task.native_provider} · ${recovery} · direct keyboard input` : task.terminal_requested && !task.native_ready && !task.terminal_open ? 'Waiting for the current worker turn to finish…' : task.terminal_requested ? `Agent paused · ${recovery}` : 'The actual CLI, connected to your keyboard.';
   if(!nativeReturning && (nativeAutoAttach === `${selectedFleet}/${selectedTask}` || (activeTab === 'native' && task.terminal_requested && !socket)) && (task.native_ready || (task.terminal_open && task.terminal_mode !== 'shell'))) {
-    nativeAutoAttach=null; connectTerminal('agent').catch(e=>toast(e.message,true));
+    nativeAutoAttach=null; const takeover=nativeTakeover === `${selectedFleet}/${selectedTask}`;nativeTakeover=null;connectTerminal('agent',takeover).catch(e=>toast(e.message,true));
   }
   $('open-terminal').disabled = fleet.running || !!task.attempt || ['working','verifying','commit_pending'].includes(task.state) || socket?.readyState === WebSocket.OPEN;
   $('open-terminal').textContent = task.terminal_open ? 'Reconnect shell' : 'Open terminal';
@@ -391,8 +392,8 @@ function disconnectTerminal() {
   $('native-terminal').hidden=true; $('native-terminal').replaceChildren(); $('native-placeholder').hidden=false;
   $('terminal').hidden = true; $('terminal').replaceChildren(); $('terminal-state').textContent = 'Local worktree shell';
 }
-async function connectTerminal(mode='shell') {
-  if (socket?.readyState === WebSocket.OPEN) return;
+async function connectTerminal(mode='shell',takeover=false) {
+  if (socket?.readyState === WebSocket.OPEN && !takeover) return;
   disconnectTerminal();
   if (!window.Terminal || !window.FitAddon) { toast('Terminal assets are missing. Run scripts/setup-supervise-web.', true); return; }
   terminalMode=mode;
@@ -401,17 +402,17 @@ async function connectTerminal(mode='shell') {
   terminal = new Terminal({cursorBlink:true,fontFamily:'Menlo, ui-monospace, monospace',fontSize:12,scrollback:3000,theme:{background:'#0b0e0c',foreground:'#d2e0ce',cursor:'#c5f47b',selectionBackground:'#5b784755'}});
   fit = new FitAddon.FitAddon(); terminal.loadAddon(fit); terminal.open(mount); fit.fit();
   terminalKey = `${selectedFleet}/${selectedTask}`;
-  socket = new WebSocket(`ws://${location.host}/api${taskURL()}/terminal?mode=${mode}`); socket.binaryType = 'arraybuffer';
+  socket = new WebSocket(`ws://${location.host}/api${taskURL()}/terminal?mode=${mode}${takeover ? '&takeover=1' : ''}`); socket.binaryType = 'arraybuffer';
   const ws = socket;
   ws.onopen = () => { nativeReconnectAttempts=0; $('terminal-state').textContent = mode === 'agent' ? '● Connected · agent' : '● Connected · local shell'; ws.send(JSON.stringify({type:'resize',cols:terminal.cols,rows:terminal.rows})); terminal.focus(); refresh(); };
   ws.onmessage = event => {
     if (typeof event.data !== 'string') terminal?.write(new Uint8Array(event.data));
-    else { try { const e = JSON.parse(event.data); if (e.type === 'exit') { ws.exited=true; terminal?.writeln(`\r\n[${mode === 'agent' ? 'Agent' : 'Shell'} exited: ${e.code}]`); refresh(); } } catch {} }
+    else { try { const e = JSON.parse(event.data); if(e.type === 'detached') {ws.detached=true;toast(e.message);terminal?.writeln('\r\n['+e.message+']');} if (e.type === 'exit') { ws.exited=true; terminal?.writeln(`\r\n[${mode === 'agent' ? 'Agent' : 'Shell'} exited: ${e.code}]`); refresh(); } } catch {} }
   };
   ws.onerror = () => toast(mode === 'agent' ? 'Cannot attach to the agent yet. Wait for the worker turn to finish, and close any other tab attached to this terminal.' : 'Cannot attach. Stop the manager, reconcile workers, and close any other terminal tab first.', true);
   ws.onclose = () => {
     $('terminal-state').textContent = 'Disconnected · terminal may still be running';
-    if(mode === 'agent' && !ws.exited && socket === ws && nativeReconnectAttempts < 3) {nativeReconnectAttempts++;socket=null;}
+    if(mode === 'agent' && !ws.exited && !ws.detached && socket === ws && nativeReconnectAttempts < 3) {nativeReconnectAttempts++;socket=null;}
     refresh();
   };
   terminal.onData(data => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({type:'input',data})); });
@@ -432,12 +433,27 @@ $('save-native-session').onclick=async()=>{
   } catch(e) {toast(e.message,true);}
 };
 $('open-native').onclick=async()=>{
+  if(socket?.readyState === WebSocket.OPEN && terminalMode === 'agent') {
+    document.querySelector('.native-options').open=false;
+    requestAnimationFrame(()=>{fit?.fit();terminal?.focus();$('native-terminal').scrollIntoView({block:'nearest'});});
+    return;
+  }
   try {
-    nativeReconnectAttempts=0;selectTab('native');
+    nativeReconnectAttempts=0;nativeReturning=true;selectTab('native');
     await api(taskURL()+'/native/request',currentTask()?.terminal_requested ? {} : nativeBody());
-    nativeAutoAttach=`${selectedFleet}/${selectedTask}`;
+    document.querySelector('.native-options').open=false;
+    nativeTakeover=`${selectedFleet}/${selectedTask}`;nativeReturning=false;nativeAutoAttach=`${selectedFleet}/${selectedTask}`;
     await refresh();
-  } catch(e) { nativeAutoAttach=null; toast(e.message,true); }
+  } catch(e) { nativeAutoAttach=null; toast(e.message,true); } finally {nativeReturning=false;}
+};
+$('restart-native').onclick=async()=>{
+  nativeReturning=true;nativeAutoAttach=null;
+  const key=`${selectedFleet}/${selectedTask}`,path=taskURL();
+  try {
+    disconnectTerminal();render();await api(path+'/terminal/close',{});await api(path+'/native/request',{});
+    if(key === `${selectedFleet}/${selectedTask}`){nativeReturning=false;nativeReconnectAttempts=0;nativeTakeover=`${selectedFleet}/${selectedTask}`;nativeAutoAttach=key;await refresh();}
+    toast('CLI restarted using its saved chat when available.');
+  } catch(e){toast(e.message,true);} finally{nativeReturning=false;}
 };
 $('return-native').onclick=async()=>{
   nativeReturning=true;

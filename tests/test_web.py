@@ -224,6 +224,41 @@ for line in sys.stdin:
         self.assertEqual(response.status,200)
         await ws.close()
 
+    async def test_native_reconnect_moves_view_without_restarting_cli_then_reopens_after_exit(self):
+        import sys
+        cli=self.root/'interactive.py'
+        cli.write_text("import os,sys\nprint('PID='+str(os.getpid()),flush=True)\nprint('CHAT='+sys.argv[-1],flush=True)\nfor line in sys.stdin:\n if line.strip() == '/exit': break\n print('Reply: '+line.strip(),flush=True)\n")
+        entry=await self.create()
+        endpoint=f"/api/fleets/{entry['id']}/tasks/fix"
+        body={'program':'custom','command':[sys.executable,str(cli)],'resume_command':[sys.executable,str(cli),'{session_id}'],'session_id':'exact-reopen-chat'}
+        self.assertEqual((await self.post(endpoint+'/native/request',body)).status,200)
+        first=await self.client.ws_connect(endpoint+'/terminal?mode=agent',headers={'Origin':self.origin})
+        await self.output_until(first,b'CHAT=exact-reopen-chat')
+        terminal=self.controller.terminals[(entry['id'],'fix')]
+        pid=terminal.process.pid
+        with self.assertRaises(WSServerHandshakeError):
+            await self.client.ws_connect(endpoint+'/terminal?mode=agent',headers={'Origin':self.origin})
+        second=await self.client.ws_connect(endpoint+'/terminal?mode=agent&takeover=1',headers={'Origin':self.origin})
+        detached=await first.receive_json()
+        self.assertEqual(detached['type'],'detached')
+        await first.close()
+        await self.output_until(second,b'CHAT=exact-reopen-chat')
+        self.assertEqual(terminal.process.pid,pid)
+        await asyncio.sleep(.05)
+        self.assertIsNotNone(terminal.ws)
+        with self.assertRaises(WSServerHandshakeError):
+            await self.client.ws_connect(endpoint+'/terminal?mode=agent',headers={'Origin':self.origin})
+        await second.send_json({'type':'input','data':'still same CLI\n'})
+        await self.output_until(second,b'Reply: still same CLI')
+        await second.send_json({'type':'input','data':'/exit\n'})
+        await terminal.reaper
+        await second.close()
+        self.assertEqual((await self.post(endpoint+'/native/request',{})).status,200)
+        reopened=await self.client.ws_connect(endpoint+'/terminal?mode=agent',headers={'Origin':self.origin})
+        await self.output_until(reopened,b'CHAT=exact-reopen-chat')
+        self.assertNotEqual(self.controller.terminals[(entry['id'],'fix')].process.pid,pid)
+        await reopened.close()
+
     async def test_new_native_chat_recovers_exact_id_after_server_restart(self):
         bindir=self.root/'native-bin';bindir.mkdir()
         cli=bindir/'codex'

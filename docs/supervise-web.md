@@ -305,3 +305,11 @@ interactive terminal. Custom CLI commands must include their own permission opti
 Full access grants the local CLI the filesystem, network and command access of the
 account running this app. Normal login/trust and model clarification questions can
 still appear.
+
+Use **Show terminal** to focus an already connected CLI and collapse recovery
+settings. Use **Reconnect here** to move an existing terminal connection to this browser tab
+without restarting the CLI. The previous tab detaches and keeps its transcript.
+If a CLI has exited, **Resume agent chat** reopens it. **Restart CLI** closes and
+relaunches the program using its saved chat ID, and also applies updated permission
+settings. It interrupts any response currently in progress; save a new chat's ID
+before restarting programs that cannot report it automatically.

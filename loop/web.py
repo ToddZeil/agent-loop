@@ -1049,13 +1049,17 @@ async def terminal_socket(request):
         if terminal and terminal.exited:
             await terminal.close()
             terminal = None
-        if terminal and terminal.mode != mode:
+        if terminal and (terminal.mode == 'shell') != (mode == 'shell'):
             raise ValueError('Close the other terminal before switching modes')
         if terminal is None:
             terminal = Terminal(run, c.shell, mode, c.home)
             c.terminals[key] = terminal
         if terminal.ws and not terminal.ws.closed:
-            raise ValueError('This terminal is attached in another browser tab')
+            if mode == 'shell' or request.query.get('takeover') != '1':
+                raise ValueError('This terminal is attached in another browser tab. Select Reconnect here to move it.')
+            previous = terminal.ws
+            await previous.send_json({'type': 'detached', 'message': 'Terminal moved to another browser tab. Reconnect here to bring it back.'})
+            await previous.close()
         ws = web.WebSocketResponse(heartbeat=20, max_msg_size=65536)
         await ws.prepare(request)
         terminal.ws = ws
@@ -1082,7 +1086,8 @@ async def terminal_socket(request):
     finally:
         output.cancel()
         await asyncio.gather(output, return_exceptions=True)
-        terminal.ws = None
+        if terminal.ws is ws:
+            terminal.ws = None
     return ws
 
 
