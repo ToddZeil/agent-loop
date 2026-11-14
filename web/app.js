@@ -94,6 +94,10 @@ async function saveModel(provider, model) {
     modelCatalog = (await api('/models', {provider,model})).providers;
   }
 }
+function agentName(task) {
+  return /^task-\d+$/.test(task.id) && task.goal
+    ? task.goal.trim().split('\n')[0].slice(0, 72) : task.id;
+}
 function currentFleet() { return fleets.find(f => f.id === selectedFleet); }
 function currentTask() { return currentFleet()?.tasks.find(t => t.id === selectedTask); }
 function taskURL() { return `/fleets/${encodeURIComponent(selectedFleet)}/tasks/${encodeURIComponent(selectedTask)}`; }
@@ -127,7 +131,7 @@ function render() {
   $('subtitle').title = fleet?.home || '';
   $('stat-total').textContent = tasks.length;
   $('stat-active').textContent = tasks.filter(t => t.state === 'working' || t.state === 'verifying').length;
-  $('stat-waiting').textContent = tasks.filter(t => t.state === 'waiting').length;
+  $('stat-waiting').textContent = tasks.filter(t => ['waiting','blocked'].includes(t.state)).length;
   $('stat-done').textContent = tasks.filter(t => t.state === 'complete').length;
   renderTokenMonitor(fleet);
   $('worker-count').textContent = String(tasks.length).padStart(2,'0');
@@ -141,11 +145,17 @@ function render() {
     $('supervisor-label').textContent = `Supervisor: ${fleet.supervisor?.provider || 'unknown'} / ${fleet.supervisor?.model || 'default model'}`;
   }
   const query = $('worker-search').value.trim().toLowerCase();
-  const visibleTasks = tasks.filter(t => !query || `${t.id} ${t.repo} ${t.goal}`.toLowerCase().includes(query));
+  const status = $('worker-filter').value;
+  const visibleTasks = tasks.filter(t => {
+    const matchesQuery = !query || `${t.id} ${t.repo} ${t.goal}`.toLowerCase().includes(query);
+    const matchesStatus = !status || (status === 'attention' ? ['waiting','blocked'].includes(t.state)
+      : status === 'working' ? ['working','verifying'].includes(t.state) : t.state === status);
+    return matchesQuery && matchesStatus;
+  });
   $('workers').innerHTML = visibleTasks.map(t => {
     const hold = Object.values(t.provider_holds || {}).filter(h => h.until > Date.now()/1000).sort((a,b) => a.until-b.until)[0];
     const wait = t.state === 'waiting' ? `<div class="worker-wait">${escapeHTML(t.wait_reason?.slice(0,180))}${hold ? ` · reset in <span data-until="${hold.until}">${countdown(hold.until)}</span>` : t.retry_at ? ` · retry in <span data-until="${t.retry_at}">${countdown(t.retry_at)}</span>` : ''}</div>` : '';
-    return `<button class="worker-card ${t.id === selectedTask ? 'selected' : ''}" data-task="${escapeHTML(t.id)}"><div class="worker-top"><strong>${escapeHTML(t.id)}</strong>${pill(t.signal || t.state)}</div><span class="repo" title="${escapeHTML(t.repo)}">${escapeHTML(t.repo.split(/[\\/]/).filter(Boolean).pop())}</span><div class="goal">${escapeHTML(t.goal || t.next_action)}</div>${wait}<div class="worker-bottom"><span class="model">${escapeHTML(t.provider)} / ${escapeHTML(t.model || 'default')}</span><span>${t.turns} turns · ${tokenNumber(t.usage ? t.usage.agent.total_tokens : Object.values(t.tokens || {}).reduce((a,b) => a+b,0))} tokens</span></div></button>`;
+    return `<button class="worker-card ${t.id === selectedTask ? 'selected' : ''}" data-task="${escapeHTML(t.id)}"><div class="worker-top"><strong>${escapeHTML(agentName(t))}</strong>${pill(t.signal || t.state)}</div><span class="repo" title="${escapeHTML(t.repo)}">${escapeHTML(t.repo.split(/[\\/]/).filter(Boolean).pop())}</span><div class="goal">${escapeHTML(t.goal || t.next_action)}</div>${wait}<div class="worker-bottom"><span class="model">${escapeHTML(t.provider)} / ${escapeHTML(t.model || 'default')}</span><span>${t.turns} turns · ${tokenNumber(t.usage ? t.usage.agent.total_tokens : Object.values(t.tokens || {}).reduce((a,b) => a+b,0))} tokens</span></div></button>`;
   }).join('') || '<p class="list-empty">No matching agents.</p>';
   $('workers').querySelectorAll('button').forEach(b => b.onclick = () => chooseTask(b.dataset.task));
   const task = currentTask();
@@ -164,9 +174,15 @@ function render() {
   }
   $('save-agent-model').disabled = !!currentFleet()?.running || !!task.attempt;
   $('worker-output-status').textContent = `${task.signal || task.state} · read-only · updates live`;
-  $('task-title').textContent = task.id; $('task-status').className = `pill ${task.state}`; $('task-status').textContent = task.signal || task.state;
+  $('task-title').textContent = agentName(task); $('task-title').title = task.id; $('task-status').className = `pill ${task.state}`; $('task-status').textContent = task.signal || task.state;
+  const deployment=fleet.deployment;
+  $('deploy-agent').hidden=!deployment || task.repo !== deployment.checkout;
+  const deploymentBusy=deployment?.job && !['complete','failed'].includes(deployment.job.stage);
+  $('deploy-agent').disabled=!!deploymentBusy;
+  $('deploy-status').hidden=!deployment?.job || task.repo !== deployment.checkout;
+  $('deploy-status').textContent=deployment?.job ? `Deploy ${deployment.job.id.slice(0,6)}: ${deployment.job.stage}${deployment.job.error ? ' · '+deployment.job.error : ''}` : '';
   $('remove-agent').disabled = task.enabled === false || !!task.terminal_requested;
-  $('task-meta').textContent = `${task.branch}\n${task.worktree}`;
+  $('task-meta').textContent = `Agent ID: ${task.id}\n${task.branch}\n${task.worktree}`;
   $('task-meta').style.whiteSpace = 'pre-wrap';
   renderAgentUsage(task);
   const nativeConnected=socket?.readyState === WebSocket.OPEN && terminalMode === 'agent';
@@ -339,7 +355,15 @@ async function fleetAction(action) {
   catch(e) { toast(e.message, true); render(); }
 }
 $('worker-search').oninput = () => render();
+$('worker-filter').onchange = render;
 $('resume').onclick = () => fleetAction('resume'); $('stop').onclick = () => fleetAction('stop');
+$('deploy-agent').onclick=async()=>{
+  const button=$('deploy-agent');button.disabled=true;
+  try {
+    const result=await api('/deploy',{source:currentTask().worktree});
+    toast(`Deployment ${result.id.slice(0,6)} queued. Workers will reopen in their saved chats.`);await refresh();
+  } catch(e){toast(e.message,true);}finally{render();}
+};
 $('full-access').onchange = async event => {
   const checkbox=event.currentTarget,value=checkbox.checked;checkbox.disabled=true;
   try {await api(taskURL()+'/settings',{full_access:value});toast('Permissions saved. Applies next worker turn or after reopening its terminal.');await refresh();}
@@ -477,13 +501,33 @@ $('close-terminal').onclick = async () => {
 new ResizeObserver(() => { if (['native','terminal'].includes(activeTab)) { try { fit?.fit(); } catch {} } }).observe($('terminal'));
 window.addEventListener('beforeunload', () => socket?.close());
 function agentField(row,field) { return row.querySelector(`[data-field="${field}"]`) || row._options?.querySelector(`[data-field="${field}"]`); }
+function goalAgentId(goal, used) {
+  const base = goal.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48).replace(/-+$/g, '') || 'goal-agent';
+  let id = base, suffix = 2;
+  while (used.has(id)) id = `${base}-${suffix++}`;
+  used.add(id);
+  return id;
+}
+function updateAgentNames() {
+  const rows = [...$('task-fields').children];
+  const used = new Set((currentFleet()?.tasks || []).map(t => t.id));
+  rows.forEach(row => { const id = agentField(row, 'id').value.trim(); if (id) used.add(id); });
+  rows.forEach(row => {
+    const goal = agentField(row, 'goal').value.trim();
+    row.dataset.defaultId = agentField(row, 'id').value.trim() || goalAgentId(goal, used);
+    agentField(row, 'id').placeholder = row.dataset.defaultId;
+    row.querySelector('.agent-name-preview').textContent = goal ? `Name: ${agentField(row, 'id').value.trim() || row.dataset.defaultId}` : 'Name is generated from your goal.';
+  });
+}
 function addTask() {
-  do { taskNumber++; } while(currentFleet()?.tasks.some(t => t.id === `task-${taskNumber}`));
-  const row = document.createElement('section'); row.className = 'task-fields'; row.dataset.defaultId = `task-${taskNumber}`;
-  row.innerHTML = `<div class="task-field-head"><span>AGENT ${String(taskNumber).padStart(2,'0')}</span><button type="button" class="icon-button remove-task" aria-label="Remove agent form">×</button></div><label>Saved project<select data-field="project" aria-label="Saved project"><option value="">Choose a saved repository, or enter a path…</option></select></label><label data-manual-repo>Repository root<input data-field="repo" placeholder="/Users/you/projects/app" required></label><label>Goal<textarea data-field="goal" rows="3" placeholder="What would you like this agent to do?" required></textarea></label><div class="form-row"><label>Worker provider<select data-field="provider"><option>codex</option><option>claude</option><option>antigravity</option><option>muse</option></select></label><label>Model<input data-field="model" placeholder="Provider default"></label></div><label>Worker effort<select data-field="effort" aria-label="Worker effort"><option>medium</option></select></label><label class="subagent-option"><input type="checkbox" data-field="full-access" checked> Full access · no permission prompts</label><label class="subagent-option"><input type="checkbox" data-field="allow-subagents"> Allow subagents</label><small class="muted">All project files · supervisor reviews the result</small>`;
+  taskNumber++;
+  const row = document.createElement('section'); row.className = 'task-fields';
+  row.innerHTML = `<div class="task-field-head"><span>AGENT ${String(taskNumber).padStart(2,'0')}</span><button type="button" class="icon-button remove-task" aria-label="Remove agent form">×</button></div><label>Saved project<select data-field="project" aria-label="Saved project"><option value="">Choose a saved repository, or enter a path…</option></select></label><label data-manual-repo>Repository root<input data-field="repo" placeholder="/Users/you/projects/app" required></label><label>Goal<textarea data-field="goal" rows="3" placeholder="What would you like this agent to do?" required></textarea></label><div class="form-row"><label>Worker provider<select data-field="provider"><option>codex</option><option>claude</option><option>antigravity</option><option>muse</option></select></label><label>Model<input data-field="model" placeholder="Provider default"></label></div><label>Worker effort<select data-field="effort" aria-label="Worker effort"><option>medium</option></select></label><label class="subagent-option"><input type="checkbox" data-field="full-access" checked> Full access · no permission prompts</label><label class="subagent-option"><input type="checkbox" data-field="allow-subagents"> Allow subagents</label><small class="muted agent-name-preview" aria-live="polite">Name is generated from your goal.</small>`;
   const options = document.createElement('section'); options.className = 'task-options'; row._options = options;
-  options.innerHTML = `<h4>Agent ${String(taskNumber).padStart(2,'0')}</h4><label>Agent ID<input data-field="id" value="${row.dataset.defaultId}" pattern="[a-z0-9](?:[a-z0-9]|-){0,60}" placeholder="Generated automatically"></label><label>Verification command (optional)<input data-field="check" placeholder="For example: npm test"></label><small class="muted">Leave empty to use supervisor review.</small><div class="form-row"><label>Fallback provider<select data-field="fallback"><option value="">Wait for quota reset</option><option>codex</option><option>claude</option><option>antigravity</option><option>muse</option></select></label><label>Fallback model<input data-field="fallback-model" placeholder="Provider default"></label></div>`;
-  row.querySelector('.remove-task').onclick = () => { if ($('task-fields').children.length > 1) { options.remove(); row.remove(); } else toast('Add at least one agent.', true); };
+  options.innerHTML = `<h4>Agent ${String(taskNumber).padStart(2,'0')}</h4><label>Agent ID<input data-field="id" pattern="[a-z0-9](?:[a-z0-9]|-){0,60}" placeholder="Generated automatically"></label><label>Verification command (optional)<input data-field="check" placeholder="For example: npm test"></label><small class="muted">Leave empty to use supervisor review.</small><div class="form-row"><label>Fallback provider<select data-field="fallback"><option value="">Wait for quota reset</option><option>codex</option><option>claude</option><option>antigravity</option><option>muse</option></select></label><label>Fallback model<input data-field="fallback-model" placeholder="Provider default"></label></div>`;
+  row.querySelector('.remove-task').onclick = () => { if ($('task-fields').children.length > 1) { options.remove(); row.remove(); updateAgentNames(); } else toast('Add at least one agent.', true); };
+  row.querySelectorAll('.subagent-option').forEach(label => options.append(label));
   $('task-fields').append(row); $('task-options').append(options);
   row.querySelector('[data-field=project]').onchange = event => {
     row.querySelector('[data-field=repo]').value = event.target.value;
@@ -497,7 +541,10 @@ function addTask() {
   modelPicker(agentField(row, 'fallback-model'), fallback.value || 'codex');
   provider.onchange = () => modelPicker(agentField(row, 'model'), provider.value, '');
   fallback.onchange = () => modelPicker(agentField(row, 'fallback-model'), fallback.value || 'codex', '');
+  agentField(row, 'goal').oninput = updateAgentNames;
+  agentField(row, 'id').oninput = updateAgentNames;
   updateProjectPickers();
+  updateAgentNames();
 }
 function openCreate() { loadModels().catch(e => toast(e.message,true)); loadProjects().catch(e => toast(e.message,true)); if (!$('task-fields').children.length) addTask(); $('create-error').textContent = ''; $('create-dialog').showModal(); }
 $('new-fleet').onclick = openCreate; $('empty-create').onclick = openCreate; $('add-task').onclick = addTask;
@@ -514,13 +561,16 @@ $('create-form').onsubmit = async event => {
     const fields = new FormData(form);
     let tasks;
     if (fields.get('manifest').trim()) tasks = JSON.parse(fields.get('manifest')).tasks;
-    else tasks = [...$('task-fields').children].map(row => {
-      const get = field => agentField(row,field).value.trim();
-      const provider = get('provider'), fallback = get('fallback'), workers = [provider], worker_models = {};
-      if (get('model')) worker_models[provider] = get('model');
-      if (fallback && fallback !== provider) { workers.push(fallback); if (get('fallback-model')) worker_models[fallback] = get('fallback-model'); }
-      return {id:get('id') || row.dataset.defaultId,repo:get('repo'),goal:get('goal'),acceptance:get('check') ? [get('check')] : [],options:{workers,worker_models,worker_effort:get('effort'),full_access:row.querySelector('[data-field=full-access]').checked,allow_subagents:row.querySelector('[data-field=allow-subagents]').checked}};
-    });
+    else {
+      updateAgentNames();
+      tasks = [...$('task-fields').children].map(row => {
+        const get = field => agentField(row,field).value.trim();
+        const provider = get('provider'), fallback = get('fallback'), workers = [provider], worker_models = {};
+        if (get('model')) worker_models[provider] = get('model');
+        if (fallback && fallback !== provider) { workers.push(fallback); if (get('fallback-model')) worker_models[fallback] = get('fallback-model'); }
+        return {id:get('id') || row.dataset.defaultId,repo:get('repo'),goal:get('goal'),acceptance:get('check') ? [get('check')] : [],options:{workers,worker_models,worker_effort:get('effort'),full_access:agentField(row,'full-access').checked,allow_subagents:agentField(row,'allow-subagents').checked}};
+      });
+    }
     for (const task of tasks) for (const [provider, model] of Object.entries(task.options?.worker_models || {})) await saveModel(provider, model);
     const result = await api('/supervisor/agents',{tasks,start:button.value === 'start'});
     $('create-dialog').close(); await loadProjects(); await refresh(); chooseTask(result.added[0]);
@@ -545,7 +595,7 @@ function applySupervisor(supervisor) {
 }
 function renderArchived(tasks) {
   $('removed-agents').hidden = tasks.length === 0;
-  $('archived-agents').innerHTML = tasks.length ? tasks.map(t=>`<button class="button quiet" data-restore="${escapeHTML(t.id)}">↶ ${escapeHTML(t.id)}</button>`).join('') : '<small class="muted">None</small>';
+  $('archived-agents').innerHTML = tasks.length ? tasks.map(t=>`<button class="button quiet" data-restore="${escapeHTML(t.id)}">↶ ${escapeHTML(agentName(t))}</button>`).join('') : '<small class="muted">None</small>';
   $('archived-agents').querySelectorAll('[data-restore]').forEach(button=>button.onclick=async()=>{
     try { await api(`/supervisor/agents/${encodeURIComponent(button.dataset.restore)}/restore`,{}); await refresh(); toast('Agent restored.'); } catch(e) { toast(e.message,true); }
   });
@@ -570,10 +620,18 @@ $('supervisor-settings').onclick = () => {
   $('supervisor-error').textContent = ''; $('supervisor-dialog').showModal();
 };
 $('supervisor-form').onsubmit = async event => {
-  event.preventDefault(); const data = new FormData(event.currentTarget), button = event.submitter; button.disabled=true;
-  try { await saveModel(data.get('provider'), data.get('model').trim()); await api('/supervisor/settings',{supervisor:{...currentFleet().supervisor,provider:data.get('provider'),model:data.get('model').trim() || null,effort:data.get('effort')},max_parallel:event.currentTarget.elements['parallel-unlimited'].checked ? null : Number(data.get('parallel')),keeper:{enabled:event.currentTarget.elements['keeper-enabled'].checked,model:data.get('keeper-model').trim() || 'qwen2.5-coder:7b'}}); $('supervisor-dialog').close(); await refresh(); toast('Supervisor settings saved.'); }
-  catch(e) { $('supervisor-error').textContent=e.message; } finally { button.disabled=false; }
+  event.preventDefault();
+  const form=event.currentTarget,data=new FormData(form),button=event.submitter;
+  const settings={supervisor:{...currentFleet().supervisor,provider:data.get('provider'),model:data.get('model').trim() || null,effort:data.get('effort')},
+    max_parallel:form.elements['parallel-unlimited'].checked ? null : Number(data.get('parallel')),
+    keeper:{enabled:form.elements['keeper-enabled'].checked,model:data.get('keeper-model').trim() || 'qwen2.5-coder:7b'}};
+  button.disabled=true;
+  try {
+    await saveModel(data.get('provider'),data.get('model').trim());await api('/supervisor/settings',settings);
+    applySupervisor((await api('/supervisor')).supervisor);render();$('supervisor-dialog').close();toast('Supervisor settings saved.');
+  } catch(e){$('supervisor-error').textContent=e.message;}finally{button.disabled=false;}
 };
+
 function connectEvents() {
   events = new EventSource('/api/events');
   events.addEventListener('state',event=>{try{applySupervisor(JSON.parse(event.data));render();$('updated').textContent=`Live · ${new Date().toLocaleTimeString()}`;}catch(e){toast(e.message,true);}});

@@ -72,6 +72,7 @@ def build_prompt(record):
     from .context import DEFAULT_CONTEXT_CHARACTERS, fit
     task = record["task"]
     workspace = Path(record["workspace"])
+    os.environ["AGENT_LOOP_DEPLOY_COMMAND"] = str(Path(__file__).resolve().parent.parent / "scripts" / "merge-deploy")
     sections = [("instructions",
                  "Implement this coding section directly in the managed worktree. "
                  "Use repository tools to read, search, edit, and run focused diagnostics. "
@@ -95,6 +96,7 @@ def run_attempt(record_path):
     record_path = Path(record_path)
     record = json.loads(record_path.read_text())
     workspace = Path(record["workspace"])
+    os.environ["AGENT_LOOP_DEPLOY_COMMAND"] = str(Path(__file__).resolve().parent.parent / "scripts" / "merge-deploy")
     lock_path = workspace_lock_path(record["home"], workspace)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     import fcntl

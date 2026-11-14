@@ -35,3 +35,16 @@ Custom CLI commands supply their own permission flags.
   checkout serving the application. Restarting a server does not integrate branches.
 - During a supervised run, follow the runtime instructions about Git ownership; the
   manager normally verifies and commits the worker's result.
+
+## Publishing worker changes to the running workspace
+
+When the user requests a merge/deployment, run `"$AGENT_LOOP_DEPLOY_COMMAND"` from
+this repository's worker worktree. The canonical command is
+`/Users/thall/AndroidStudioProjects/didnteventry/agent-loop/scripts/merge-deploy`.
+The browser offers **Agent settings → Merge & redeploy** for registered workers in
+this repository. This managed operation is allowed even though manual worker Git
+commits/branch changes remain keeper-owned: it snapshots edits with a private index,
+validates an isolated merge, pushes main, fast-forwards the serving checkout and
+reopens active chats in the existing supervisor home. It never changes the worker's
+branch or staged files. Do not start a separate preview as a substitute for updating
+port 8765. Read the returned status file and sibling `.log` for progress/errors.

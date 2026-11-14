@@ -157,6 +157,17 @@ class WebTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(spec['desired_running'])
         self.assertTrue(spec['tasks'][0]['terminal_requested'])
 
+    async def test_deploy_route_accepts_known_worker_and_rejects_arbitrary_paths(self):
+        entry=await self.create()
+        run=self.controller.run_for(entry['id'],'fix')
+        with mock.patch('loop.web.deploy.common_dir',return_value=self.root), mock.patch('loop.web.deploy.submit',return_value={'id':'queued','url':'http://localhost'}) as submit:
+            response=await self.post('/api/deploy',{'source':str(run.worktree)})
+            self.assertEqual(response.status,202,await response.text())
+            submit.assert_called_once_with(str(run.worktree),'')
+            response=await self.post('/api/deploy',{'source':str(self.root/'unknown')})
+            self.assertEqual(response.status,400)
+            self.assertEqual(submit.call_count,1)
+
     async def test_native_codex_terminal_has_real_pty_and_returns_control(self):
         bindir=self.root/'bin';bindir.mkdir()
         cli=bindir/'codex'

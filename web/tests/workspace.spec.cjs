@@ -440,6 +440,7 @@ test('Add agents clearly loads the Codex model list before selection',async ({pa
 test('actual interactive terminal supports direct typing, reconnect, and other supervised workers',async ({page,request})=>{
   const fixture=await (await request.get('/test-fixture')).json();
   await page.goto('/');
+  await page.waitForFunction(()=>typeof currentTask === 'function' && currentTask());
   const nativeAgent=await page.locator('#task-title').textContent();
   await page.getByRole('tab',{name:'Agent terminal',exact:true}).click();
   await page.locator('#open-native').click();
@@ -476,6 +477,7 @@ test('actual interactive terminal supports direct typing, reconnect, and other s
 test('custom CLI accepts direct input and resumes its explicitly saved chat',async({page,request})=>{
   const fixture=await(await request.get('/test-fixture')).json();
   await page.goto('/');
+  await page.waitForFunction(()=>typeof currentTask === 'function' && currentTask());
   await page.getByRole('tab',{name:'Agent terminal',exact:true}).click();
   await page.locator('.native-options summary').click();
   await page.locator('#native-program').selectOption('custom');
@@ -519,4 +521,65 @@ test('custom CLI accepts direct input and resumes its explicitly saved chat',asy
   await expect(page.locator('#native-status')).toContainText('Connected',{timeout:20000});
   await page.locator('#return-native').click();
   await page.locator('#stop').click();
+});
+
+test('goal names stay unique, update with edits, and respect custom IDs', async ({page,request}) => {
+  const fixture=await (await request.get('/test-fixture')).json();
+  await page.goto('/');
+  await page.locator('#new-fleet').click();
+  await page.getByLabel('Goal',{exact:true}).fill('Simplify café navigation!');
+  await expect(page.locator('.agent-name-preview')).toHaveText('Name: simplify-cafe-navigation');
+  await page.locator('#add-task').click();
+  await page.getByLabel('Goal',{exact:true}).nth(1).fill('Simplify café navigation!');
+  await expect(page.locator('.agent-name-preview').nth(1)).toHaveText('Name: simplify-cafe-navigation-2');
+  await optionalSettings(page);
+  await page.getByLabel('Agent ID',{exact:true}).first().fill('custom-navigation');
+  await expect(page.locator('.agent-name-preview').first()).toHaveText('Name: custom-navigation');
+  await expect(page.locator('.agent-name-preview').nth(1)).toHaveText('Name: simplify-cafe-navigation');
+  await page.getByLabel('Repository root',{exact:true}).first().fill(fixture.repo);
+  await page.getByLabel('Repository root',{exact:true}).nth(1).fill(fixture.secondRepo);
+  await page.getByRole('button',{name:'Add agents',exact:true}).click();
+  await expect(page.locator('#create-dialog')).toBeHidden();
+  await expect(page.locator('#task-title')).toHaveText('custom-navigation');
+  await page.getByLabel('Find agents',{exact:true}).fill('café navigation');
+  await expect(page.locator('.worker-card')).toHaveCount(2);
+  await page.getByLabel('Filter agents by status').selectOption('complete');
+  await expect(page.locator('.worker-card')).toHaveCount(0);
+  await expect(page.locator('#workers')).toHaveText('No matching agents.');
+  await page.getByLabel('Filter agents by status').selectOption('ready');
+  await expect(page.locator('.worker-card')).toHaveCount(2);
+  await page.locator('#new-fleet').click();
+  await page.getByLabel('Goal',{exact:true}).fill('Simplify café navigation!');
+  await expect(page.locator('.agent-name-preview')).toHaveText('Name: simplify-cafe-navigation-2');
+  expect(await page.evaluate(() => agentName({id:'task-6',goal:'Simplify navigation'}))).toBe('Simplify navigation');
+  const generated = await page.evaluate(() => {
+    const used = new Set();
+    return ['你好', '你好', 'a'.repeat(200)].map(goal => goalAgentId(goal, used));
+  });
+  expect(generated).toEqual(['goal-agent','goal-agent-2','a'.repeat(48)]);
+});
+
+test('merge and redeploy submits the selected worktree and exposes job progress',async({page})=>{
+  let job=null,posted;
+  await page.route('**/api/events',route=>route.abort());
+  await page.route('**/api/supervisor',async route=>{
+    const response=await route.fetch(),data=await response.json();
+    const task=data.supervisor.tasks.find(t=>t.enabled !== false);
+    data.supervisor.deployment={checkout:task.repo,branch:'main',url:'http://127.0.0.1:8776',job};
+    await route.fulfill({response,json:data});
+  });
+  await page.route('**/api/deploy',async route=>{
+    posted=route.request().postDataJSON();job={id:'deployment-test-job',stage:'checking'};
+    await route.fulfill({json:{id:job.id,url:'http://127.0.0.1:8776'}});
+  });
+  await page.goto('/');
+  await page.waitForFunction(()=>typeof currentTask === 'function' && currentTask());
+  const source=await page.evaluate(()=>currentTask().worktree);
+  await agentSettings(page);
+  await expect(page.locator('#deploy-agent')).toBeVisible();
+  await page.locator('#deploy-agent').click();
+  await expect(page.locator('#toast')).toContainText('Deployment deploy');
+  expect(posted).toEqual({source});
+  await expect(page.locator('#deploy-agent')).toBeDisabled();
+  await expect(page.locator('#deploy-status')).toContainText('checking');
 });

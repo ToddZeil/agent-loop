@@ -1,0 +1,14 @@
+#!/usr/bin/env python3
+"""Submit from any worktree, using the primary checkout's deployment implementation."""
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+common = Path(subprocess.check_output(['git', 'rev-parse', '--git-common-dir'], text=True).strip())
+common = common.resolve()
+root = common.parent
+python = root / '.agent-loop' / 'web-venv' / 'bin' / 'python'
+source = os.getcwd()
+os.chdir(root)
+os.execv(str(python), [str(python), '-m', 'loop.deploy', '--source', source, *sys.argv[1:]])

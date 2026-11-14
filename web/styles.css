@@ -227,3 +227,22 @@ dialog label { display: block; font-size: 11px; color: #a1b39e; margin-top: 16px
   dialog .form-row>label { flex-basis:100%; }
   .agent-model-settings label { flex-basis:100%; }
 }
+
+/* Keep names readable and secondary controls quiet at every viewport width. */
+#worker-filter { margin-bottom: 12px; padding: 8px 10px; font-size: 11px; color: var(--muted); }
+.worker-top { flex-wrap: wrap; }
+.worker-top strong { flex: 1 1 100px; min-width: 0; }
+.inspector-heading>div:first-child { min-width: 0; }
+.inspector-heading h2 { overflow-wrap: anywhere; line-height: 1.4; }
+.agent-name-preview { display: block; overflow-wrap: anywhere; margin-top: 10px; }
+.task-options .subagent-option { display: flex; align-items: center; gap: 8px; }
+.task-options .subagent-option input { width: auto; }
+.worker-card .goal { overflow-wrap: anywhere; }
+@media(max-width:650px) {
+  input, select, textarea { font-size: 16px; }
+  .tab { min-height: 44px; }
+  .icon-button { min-width: 44px; min-height: 44px; }
+  #worker-filter { min-height: 44px; font-size: 14px; }
+  dialog input, dialog select, dialog textarea { font-size: 16px; }
+  .worker-top strong { font-size: 14px; }
+}

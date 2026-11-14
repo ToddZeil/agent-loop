@@ -316,3 +316,39 @@ If a CLI has exited, **Resume agent chat** reopens it. **Restart CLI** closes an
 relaunches the program using its saved chat ID, and also applies updated permission
 settings. It interrupts any response currently in progress; save a new chat's ID
 before restarting programs that cannot report it automatically.
+
+## Merge a worker and redeploy the primary workspace
+
+Open **Agent settings → Merge & redeploy**, or run from any worktree of this repository:
+
+```sh
+"$AGENT_LOOP_DEPLOY_COMMAND"
+# Also works for older worktrees that do not contain the helper yet:
+/Users/thall/AndroidStudioProjects/didnteventry/agent-loop/scripts/merge-deploy
+```
+
+The command returns a job ID, status-file path and workspace URL immediately. The
+job runs independently so it survives restarting the CLI that submitted it. Live
+progress appears beside the deploy button. Use `scripts/merge-deploy --status` or
+read the returned JSON file and sibling `.log` for detailed output.
+
+Deployment captures tracked and nonignored new files with a temporary Git index.
+The source branch, HEAD, staged files and edits are preserved. The job merges current
+main, the serving release and the worker snapshot in a separate worktree, runs Python,
+JavaScript and browser checks, then pushes main without force. A failing check,
+conflict, changed serving checkout or concurrent remote main update stops publication
+and leaves the old app running. Jobs serialize through one deployment lock.
+
+After publishing, the primary checkout advances to the checked commit. The app restarts
+at its existing URL and uses the same supervisor directory, agents and worktrees;
+active CLI chats reopen by exact ID. Detached automatic worker attempts remain
+recoverable and the supervisor resumes its previous running state. Save new chat IDs
+and close standalone worktree shells before deploying. Restarting interrupts any
+interactive response in progress. Existing worktrees keep their source checkout;
+new workers start from the deployed commit.
+
+Only the canonical server using `.agent-loop/web` registers the deployment target.
+Independent previews cannot replace it. Runtime settings and job logs live under
+`.agent-loop/deploy/`; the target records main, origin, launch arguments and checks.
+The deployment implementation uses the primary checkout even when a worker is old.
+Other project agents cannot deploy over this workspace's repository through the UI.

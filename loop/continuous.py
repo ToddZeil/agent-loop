@@ -234,6 +234,13 @@ class ContinuousRun(LiteRun):
                  "Previous evidence: " + json.dumps(recent),
                  "Handoff: " + state["handoff"],
                  "Operator notes: " + json.dumps(state["operator_notes"][-5:])]
+        if self.repo == Path(__file__).resolve().parent.parent:
+            helper = Path(__file__).resolve().parent.parent / "scripts" / "merge-deploy"
+            parts.append("To publish this repository's completed work to main and redeploy its local workspace, "
+                         "run " + str(helper) + " from the worktree when the user requests deployment. "
+                         "The helper snapshots edits without committing or switching this worker branch, "
+                         "runs verification, merges to main and restores worker chats. Do not start a separate preview "
+                         "as a substitute for deploying the primary workspace.")
         if state["failure_count"] >= 2:
             parts.append("Repeated unchanged check failure. Diagnose the exact cause and change strategy once.")
         return "\n\n".join(parts)

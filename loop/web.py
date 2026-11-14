@@ -22,6 +22,7 @@ import uuid
 from aiohttp import web, WSMsgType
 
 from .storage import atomic_json
+from . import deploy
 from .models import catalog, remember
 from .native import agent_terminal_command, discover_session, terminal_config, store_session, saved_session
 from .usage import record as record_usage
@@ -110,7 +111,7 @@ class Terminal:
                 self.process = subprocess.Popen(
                     [sys.executable, str(ROOT / 'loop' / 'terminal_child.py'), *argv],
                     cwd=run.worktree, env={**os.environ, 'TERM': 'xterm-256color',
-                                           'COLORTERM': 'truecolor'},
+                                           'COLORTERM': 'truecolor', 'AGENT_LOOP_DEPLOY_COMMAND': str(ROOT / 'scripts' / 'merge-deploy')},
                     stdin=slave, stdout=slave, stderr=slave, start_new_session=True,
                     close_fds=True, pass_fds=(keeper_lock.fileno(), workspace_lock.fileno()))
             finally:
@@ -258,6 +259,7 @@ class Controller:
         self.snapshot_epoch = uuid.uuid4().hex
         self.snapshot_revision = 0
         self.snapshot_body = None
+        self.server_commit = deploy.git(ROOT, 'rev-parse', 'HEAD')
         self.terminals = {}
         self.shell = os.environ.get('SHELL', '/bin/zsh' if sys.platform == 'darwin' else '/bin/bash')
         self.registry_lock = locked(self.home / 'web.lock')
@@ -327,6 +329,8 @@ class Controller:
         result['usage'] = {'agents': agent_totals, 'supervisor': supervisor_totals,
                            'total': combine_usage([agent_totals, supervisor_totals])}
         result['ui_revision'] = ui_revision()
+        result['server_commit'] = self.server_commit
+        result['deployment'] = deploy.public_status(ROOT)
         result.update(keeper=spec.get('keeper', {'enabled': False}), max_parallel=spec['max_parallel'],
                       desired_running=spec.get('desired_running', False),
                       supervisor_busy=shared.get('busy') if result['running'] else None)
@@ -1091,6 +1095,24 @@ async def terminal_socket(request):
     return ws
 
 
+async def deploy_action(request):
+    c = request.app[APP_KEY]
+    body = await object_body(request)
+    source = body.get('source')
+    message = body.get('message', '')
+    if not isinstance(message, str) or len(message) > 1000:
+        raise ValueError('Deployment message must be text of at most 1000 characters')
+    if not isinstance(source, str) or not source:
+        raise ValueError('Select a worker worktree to merge and redeploy')
+    # Only registered agents in this repository are exposed through the browser.
+    known = [Path(t['worktree']).resolve() for entry in c.status() for t in entry['tasks']]
+    if Path(source).resolve() not in known or deploy.common_dir(source) != deploy.common_dir(ROOT):
+        raise ValueError('Choose a worker from the repository serving this workspace')
+    async with c.mutation:
+        result = await asyncio.to_thread(deploy.submit, source, message)
+    return web.json_response(result, status=202)
+
+
 def create_app(home):
     app = web.Application(middlewares=[boundary], client_max_size=1024 * 1024)
     app[APP_KEY] = Controller(home)
@@ -1107,6 +1129,7 @@ def create_app(home):
                         'fit.js': dependencies / 'addon-fit' / 'lib' / 'addon-fit.js'}.items():
         app.router.add_get('/vendor/' + route, file_handler(path))
     app.router.add_get('/api/state', state)
+    app.router.add_post('/api/deploy', deploy_action)
     app.router.add_get('/api/supervisor', supervisor_state)
     app.router.add_get('/api/events', supervisor_events)
     app.router.add_post('/api/supervisor/settings', supervisor_settings)
@@ -1142,8 +1165,10 @@ def main():
     args = parser.parse_args()
     if not (ASSETS / 'node_modules' / '@xterm' / 'xterm').exists():
         parser.error('Browser assets are missing. Run scripts/setup-supervise-web first.')
+    app = create_app(args.home)
+    deploy.register(ROOT, args.home, args.port)
     print(f'Open http://127.0.0.1:{args.port} — local supervisor', flush=True)
-    web.run_app(create_app(args.home), host='127.0.0.1', port=args.port, print=None)
+    web.run_app(app, host='127.0.0.1', port=args.port, print=None)
 
 
 if __name__ == '__main__':

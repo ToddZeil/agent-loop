@@ -126,7 +126,8 @@ def agent_terminal_command(run, config=None):
     full_access = run.config.get('full_access', True)
     effort = run.config.get('worker_effort') or 'medium'
     instructions = ('Work in this managed worktree. You may edit all project files. '
-                    'Do not commit, push, or change branches; the supervisor manages Git.\n' + run._prompt(state))
+                    'Do not manually commit, push, or change branches; the supervisor manages Git. '
+                    'Use the managed deployment helper, when provided, for user-requested publishing.\n' + run._prompt(state))
     if provider == 'codex':
         options = ['--no-daemon', '--no-alt-screen', '--cd', str(run.worktree), '--sandbox', 'danger-full-access' if full_access else 'workspace-write',
                    '--ask-for-approval', 'never' if full_access else 'on-request', '-c', 'developer_instructions=' + json.dumps(instructions),
