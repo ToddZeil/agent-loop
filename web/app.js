@@ -21,12 +21,18 @@ async function api(path, body) {
   if (!response.ok) throw new Error(data.error || `Request failed (${response.status})`);
   return data;
 }
-let modelCatalog = {}, modelCatalogPromise;
+let modelCatalog = {}, modelCatalogPromise, modelsLoading = false, modelLoadError = '';
 async function loadModels() {
-  modelCatalogPromise ||= api('/models').then(data => {
-    modelCatalog = data.providers;
-    document.querySelectorAll('[data-model-picker]').forEach(select => select._reload());
-  }).finally(() => { modelCatalogPromise = null; });
+  if(!modelCatalogPromise) {
+    modelsLoading=true; modelLoadError='';
+    modelCatalogPromise=api('/models').then(data=>{modelCatalog=data.providers;})
+      .catch(error=>{modelLoadError=error.message;throw error;})
+      .finally(()=>{
+        modelsLoading=false;modelCatalogPromise=null;
+        document.querySelectorAll('[data-model-picker]').forEach(select=>select._reload());
+      });
+    document.querySelectorAll('[data-model-picker]').forEach(select=>select._reload());
+  }
   return modelCatalogPromise;
 }
 function effortPicker(input, select, value = select.value || 'medium') {
@@ -48,7 +54,8 @@ function modelPicker(input, provider, value = input.value) {
     const refresh=document.createElement('button'); refresh.type='button'; refresh.className='model-refresh';
     refresh.textContent='↻'; refresh.title='Refresh model catalogue'; refresh.setAttribute('aria-label','Refresh models');
     refresh.onclick=async()=>{refresh.disabled=true;try{await loadModels();toast('Model catalogue refreshed.');}catch(e){toast(e.message,true);}finally{refresh.disabled=false;}};
-    controls.append(select,refresh); input.after(controls,custom);
+    const status=document.createElement('small');status.className='model-picker-status';status.setAttribute('aria-live','polite');select._status=status;
+    controls.append(select,refresh); input.after(controls,custom,status);
     input._picker = select; select._input = input; select._custom = custom;
     select.onchange = () => {
       custom.hidden = select.value !== '__custom';
@@ -61,7 +68,13 @@ function modelPicker(input, provider, value = input.value) {
   const select = input._picker, custom = select._custom;
   select._provider = provider;
   const models = modelCatalog[provider]?.models || [];
-  select.innerHTML = '<option value="">Provider default</option>' + models.map(m =>
+  const waiting=modelsLoading && !modelCatalog[provider];
+  const providerLabel={codex:'Codex',claude:'Claude',antigravity:'Antigravity',muse:'Muse'}[provider] || 'Provider';
+  select.setAttribute('aria-label',`${providerLabel} model`);
+  select.disabled=waiting;
+  select._status.textContent=waiting ? `Loading ${providerLabel} models…` : modelLoadError ? `Model refresh failed: ${modelLoadError}` :
+    models.length ? `${models.length} model ${models.length===1 ? 'choice' : 'choices'} · open the dropdown to select` : 'No saved model list. Use provider default or enter a custom ID.';
+  select.innerHTML = `<option value="">${waiting ? 'Loading models…' : models.length ? `Provider default · ${models.length} choices` : 'Provider default'}</option>` + models.map(m =>
     `<option value="${escapeHTML(m.id)}">${escapeHTML(m.label)} · ${escapeHTML(m.id)}${m.custom ? ' (saved custom)' : m.previously_seen ? ' (previously seen)' : ''}</option>`
   ).join('') + '<option value="__custom">Custom model ID…</option>';
   const known = models.some(m => m.id === value);
@@ -513,6 +526,7 @@ async function changeProjects(body,button) {
 $('scan-projects').onsubmit = event => { event.preventDefault(); const data = new FormData(event.currentTarget); changeProjects({action:'scan',folder:data.get('folder'),depth:Number(data.get('depth'))},event.submitter); };
 $('rescan-projects').onclick = event => changeProjects({action:'rescan'},event.currentTarget);
 $('add-projects').onsubmit = event => { event.preventDefault(); const data = new FormData(event.currentTarget); changeProjects({action:'add',paths:data.get('paths').split('\n').map(s=>s.trim()).filter(Boolean)},event.submitter); };
+loadModels().catch(e => toast(e.message,true));
 loadProjects().catch(e => toast(e.message,true));
 selectTab(new URLSearchParams(location.search).get('tab') === 'activity' ? 'activity' : 'terminal');
 $('reload-interface').onclick = () => {

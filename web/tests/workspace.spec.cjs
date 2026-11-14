@@ -351,3 +351,23 @@ test('desktop opens directly to a readable conversation with its composer in vie
   expect(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth)).toBe(false);
   await page.screenshot({path:path.resolve(__dirname,'../../.agent-loop/web-redesign-mobile.png'),fullPage:true});
 });
+
+
+test('Add agents clearly loads the Codex model list before selection',async ({page})=>{
+  let release;
+  const gate=new Promise(resolve=>{release=resolve;});
+  await page.route('**/api/models',async route=>{await gate;await route.continue();});
+  await page.goto('/',{waitUntil:'domcontentloaded'});
+  await page.locator('#new-fleet').click();
+  const picker=page.locator('#task-fields [data-model-picker]').first();
+  await expect(picker).toBeDisabled();
+  await expect(page.locator('#task-fields .model-picker-status').first()).toContainText('Loading Codex models');
+  release();
+  await expect(picker).toBeEnabled();
+  await expect(picker.locator('option[value="fixture-model"]')).toBeAttached();
+  const count=await picker.locator('option').count()-2;
+  await expect(page.locator('#task-fields .model-picker-status').first()).toContainText(`${count} model choice`);
+  await picker.selectOption('fixture-model');
+  await expect(page.locator('#task-fields [data-field=model]')).toHaveValue('fixture-model');
+  await page.locator('#create-dialog [data-close]').click();
+});
