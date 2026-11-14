@@ -1,3 +1,4 @@
+try { document.documentElement.dataset.theme = localStorage.getItem('loop-theme') || 'dark'; } catch (_) { document.documentElement.dataset.theme = 'dark'; }
 'use strict';
 const $ = id => document.getElementById(id);
 const loadedUIRevision = document.querySelector('meta[name=loop-ui-revision]')?.content || '';
@@ -127,7 +128,7 @@ function render() {
   $('fleet-list').querySelectorAll('button').forEach(b => b.onclick = () => chooseFleet(b.dataset.fleet));
   $('title').textContent = 'Agent workspace';
   $('fleet-label').textContent = 'SUPERVISOR';
-  $('subtitle').textContent = fleet?.error || (fleet ? `${tasks.length} ${tasks.length === 1 ? 'agent' : 'agents'} · one persistent supervisor` : 'Add agents whenever you need another pair of hands.');
+  $('subtitle').textContent = fleet?.error || '';
   $('subtitle').title = fleet?.home || '';
   $('stat-total').textContent = tasks.length;
   $('stat-active').textContent = tasks.filter(t => t.state === 'working' || t.state === 'verifying').length;
@@ -211,7 +212,7 @@ function render() {
   $('open-native').textContent=nativeConnected ? 'Show terminal' : task.terminal_open && task.terminal_mode !== 'shell' ? 'Reconnect here' : task.terminal_requested && !task.native_ready ? 'Waiting for current turn…' : task.native_session_id ? 'Resume agent chat' : 'Open Agent terminal';
   $('return-native').disabled=!task.terminal_requested;
   const recovery=task.native_session_id ? 'chat saved for recovery' : ['codex','claude'].includes(task.native_provider) ? 'chat ID pending' : 'save the chat ID for restart recovery';
-  $('native-status').textContent=nativeConnected ? `Connected · ${task.native_provider} · ${recovery} · direct keyboard input` : task.terminal_requested && !task.native_ready && !task.terminal_open ? 'Waiting for the current worker turn to finish…' : task.terminal_requested ? `Agent paused · ${recovery}` : 'The actual CLI, connected to your keyboard.';
+  $('native-status').textContent=nativeConnected ? `Connected · ${task.native_provider} · ${recovery} · direct keyboard input` : task.terminal_requested && !task.native_ready && !task.terminal_open ? 'Waiting for the current worker turn to finish…' : task.terminal_requested ? `Agent paused · ${recovery}` : 'Direct CLI access';
   if(!nativeReturning && (nativeAutoAttach === `${selectedFleet}/${selectedTask}` || (activeTab === 'native' && task.terminal_requested && !socket)) && (task.native_ready || (task.terminal_open && task.terminal_mode !== 'shell'))) {
     nativeAutoAttach=null; const takeover=nativeTakeover === `${selectedFleet}/${selectedTask}`;nativeTakeover=null;connectTerminal('agent',takeover).catch(e=>toast(e.message,true));
   }
@@ -221,7 +222,7 @@ function render() {
   $('open-terminal').textContent = task.terminal_open ? 'Reconnect shell' : 'Open terminal';
   $('close-terminal').disabled = !task.terminal_open && !terminalKey;
   const decisions = task.decisions || [];
-  $('decisions-panel').innerHTML = decisions.length ? decisions.map(d => `<article class="decision"><small>${d.action === 'review' ? '✓ SUPERVISOR REVIEW' : d.action === 'continue' ? '↳ SUPERVISOR DIRECTION' : '◷ OPERATOR REQUIRED'} · ${new Date(d.at*1000).toLocaleTimeString()}</small><p>${escapeHTML(d.message)}</p></article>`).join('') : '<p class="muted">No interventions yet. The supervisor steps in when a worker needs help.</p>';
+  $('decisions-panel').innerHTML = decisions.length ? decisions.map(d => `<article class="decision"><small>${d.action === 'review' ? '✓ SUPERVISOR REVIEW' : d.action === 'continue' ? '↳ SUPERVISOR DIRECTION' : '◷ OPERATOR REQUIRED'} · ${new Date(d.at*1000).toLocaleTimeString()}</small><p>${escapeHTML(d.message)}</p></article>`).join('') : '<p class="muted">No decisions yet.</p>';
 }
 function tokenNumber(value) { return value == null ? '—' : Number(value).toLocaleString(); }
 function usageTable(usage) {
@@ -725,3 +726,18 @@ refresh().then(() => {
 window.addEventListener('beforeunload',()=>events?.close());
 
 new ResizeObserver(()=>{if(activeTab === 'native') {try{fit?.fit();}catch{}}}).observe($('native-terminal'));
+
+// Keep the display preference local to this browser.
+const themeToggle = $('theme-toggle');
+function updateThemeToggle() {
+  const light = document.documentElement.dataset.theme === 'light';
+  themeToggle.textContent = light ? '☾ Dark mode' : '☀ Light mode';
+  themeToggle.setAttribute('aria-label', light ? 'Switch to dark mode' : 'Switch to light mode');
+}
+themeToggle.addEventListener('click', () => {
+  const theme = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+  document.documentElement.dataset.theme = theme;
+  try { localStorage.setItem('loop-theme', theme); } catch (_) {}
+  updateThemeToggle();
+});
+updateThemeToggle();
