@@ -206,3 +206,20 @@ dialog label { display: block; font-size: 11px; color: #a1b39e; margin-top: 16px
 .agent-settings { flex-shrink:1; min-height:34px; }
 
 .model-picker-status { display:block; margin-top:6px; color:#8da784; font-size:10px; line-height:1.5; font-weight:400; }
+
+.native-panel { display:flex; flex-direction:column; min-height:0; background:#0b0e0c; }
+.native-toolbar { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px; padding:15px 18px; border-bottom:1px solid #2c3a2e; background:#151e17; }
+.native-toolbar strong { font-size:12px; }.native-toolbar small { display:block; margin-top:6px; font-size:10px; color:#8aa282; }
+.native-toolbar>div:last-child { display:flex; gap:7px; flex-wrap:wrap; }
+#native-terminal { flex:1; min-height:230px; padding:10px; overflow:hidden; }
+.native-placeholder { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:25px; color:#9cb092; }
+.native-symbol { color:#b9e58d; font:38px ui-monospace,monospace; margin-bottom:20px; }
+.native-placeholder h3 { font-size:20px; font-weight:500; color:#d7e8cf; margin-bottom:12px; }
+.native-placeholder p { max-width:450px; font-size:12px; line-height:1.8; }
+.native-placeholder small { max-width:450px; font-size:10px; line-height:1.8; color:#78966c; }
+.native-help { margin:0; padding:10px 18px; border-top:1px solid #28392a; color:#7c9272; font-size:9px; line-height:1.7; }
+.native-tab { color:#bdd79f; }.pill.interactive { color:#c0e5ff; border-color:#45647a; background:#1b2b36; }.pill.handoff { color:#e4ca9a; }
+@media(max-width:650px){.native-toolbar{padding:12px}.native-toolbar>div:last-child{width:100%}.native-toolbar .button{flex:1}.tabs{gap:16px}.native-placeholder{padding:18px}.native-placeholder h3{font-size:18px}.native-help{padding:9px 12px}}
+
+.native-options {padding:12px 18px;border-bottom:1px solid var(--border,#344034)}
+.native-options label {display:grid;gap:6px;margin:12px 0}.native-options input,.native-options select{width:100%;max-width:100%;padding:9px;background:#111813;color:inherit;border:1px solid #455241;border-radius:6px}.native-options summary{cursor:pointer}

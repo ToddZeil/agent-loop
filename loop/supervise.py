@@ -647,6 +647,7 @@ class Fleet:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             self.prepare()
             known = {}
+            owners = {}
             self.home.joinpath('stop').unlink(missing_ok=True)
             pool = ThreadPoolExecutor(max_workers=max(4, spec['max_parallel'] or 32))
             pending = {}
@@ -663,9 +664,24 @@ class Fleet:
                         break
                     runs = []
                     for task, fresh in self.runs():
+                        current = fresh.state()
+                        if (task.get('terminal_requested') and task['id'] not in pending
+                                and not current['attempt'] and current['state'] not in ('working', 'verifying', 'commit_pending')):
+                            owner = owners.pop(task['id'], None)
+                            if owner:
+                                owner.close()
+                            continue
+                        if task['id'] not in owners:
+                            handle = fresh.path('keeper.lock').open('a')
+                            try:
+                                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                            except BlockingIOError:
+                                handle.close()
+                                if not task.get('terminal_requested') and not fresh.path('native-session.json').exists():
+                                    raise
+                                continue  # An interactive owner must not stop other agents.
+                            owners[task['id']] = stack.enter_context(handle)
                         if task['id'] not in known:
-                            handle = stack.enter_context(fresh.path('keeper.lock').open('a'))
-                            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
                             known[task['id']] = fresh
                         run = known[task['id']]
                         signature = json.dumps(spec.get('keeper', {}), sort_keys=True)

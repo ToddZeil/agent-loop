@@ -371,3 +371,64 @@ test('Add agents clearly loads the Codex model list before selection',async ({pa
   await expect(page.locator('#task-fields [data-field=model]')).toHaveValue('fixture-model');
   await page.locator('#create-dialog [data-close]').click();
 });
+
+
+test('actual interactive terminal supports direct typing, reconnect, and other supervised workers',async ({page,request})=>{
+  const fixture=await (await request.get('/test-fixture')).json();
+  await page.goto('/');
+  const nativeAgent=await page.locator('#task-title').textContent();
+  await page.getByRole('tab',{name:'Agent terminal',exact:true}).click();
+  await page.locator('#open-native').click();
+  await expect(page.locator('#native-status')).toContainText('Connected');
+  await page.locator('#native-terminal .xterm-helper-textarea').focus();
+  await page.keyboard.type('hello native');await page.keyboard.press('Enter');
+  await expect.poll(()=>page.evaluate(()=>terminal.buffer.active.getLine(terminal.buffer.active.cursorY)?.translateToString() || '')).not.toBeNull();
+  await page.waitForFunction(()=>Array.from({length:terminal.buffer.active.length},(_,i)=>terminal.buffer.active.getLine(i)?.translateToString()||'').join('\n').includes('Codex reply: hello native'));
+  await page.reload();
+  await expect(page.getByRole('tab',{name:'Agent terminal',exact:true})).toHaveAttribute('aria-selected','true');
+  await expect(page.locator('#native-status')).toContainText('Connected');
+  await page.waitForFunction(()=>Array.from({length:terminal.buffer.active.length},(_,i)=>terminal.buffer.active.getLine(i)?.translateToString()||'').join('\n').includes('Codex reply: hello native'));
+  await page.locator('#resume').click();
+  await expect(page.locator('#manager-state')).toContainText('running');
+  await page.locator('#new-fleet').click();
+  await page.getByLabel('Repository root',{exact:true}).fill(fixture.repo);
+  await page.getByLabel('Goal',{exact:true}).fill('Set value to 2 while another agent is interactive.');
+  await page.getByRole('button',{name:'Add agents',exact:true}).click();
+  await expect(page.locator('#create-dialog')).toBeHidden();
+  await expect(page.locator('#task-status')).toHaveText('complete',{timeout:20000});
+  await page.locator(`[data-task="${nativeAgent}"]`).click();
+  await page.getByRole('tab',{name:'Agent terminal',exact:true}).click();
+  await expect(page.locator('#native-status')).toContainText('Connected');
+  await page.waitForFunction(()=>Array.from({length:terminal.buffer.active.length},(_,i)=>terminal.buffer.active.getLine(i)?.translateToString()||'').join('\n').includes('Codex reply: hello native'));
+  await page.locator('#native-terminal .xterm-helper-textarea').focus();
+  await page.keyboard.type('second message');await page.keyboard.press('Enter');
+  await page.waitForFunction(()=>Array.from({length:terminal.buffer.active.length},(_,i)=>terminal.buffer.active.getLine(i)?.translateToString()||'').join('\n').includes('Codex reply: second message'));
+  await page.screenshot({path:path.resolve(__dirname,'../../.agent-loop/native-codex-terminal.png'),fullPage:false});
+  await page.locator('#return-native').click();
+  await expect(page.locator('#task-status')).toHaveText('complete',{timeout:20000});
+  await page.locator('#stop').click();
+});
+
+test('custom CLI accepts direct input and resumes its explicitly saved chat',async({page,request})=>{
+  const fixture=await(await request.get('/test-fixture')).json();
+  await page.goto('/');
+  await page.getByRole('tab',{name:'Agent terminal',exact:true}).click();
+  await page.locator('.native-options summary').click();
+  await page.locator('#native-program').selectOption('custom');
+  await page.locator('#native-command').fill(fixture.nativeCommand);
+  await page.locator('#native-resume').fill(fixture.nativeCommand+' resume {session_id}');
+  await page.locator('#open-native').click();
+  await expect(page.locator('#native-status')).toContainText('Connected');
+  await page.locator('#native-terminal .xterm-helper-textarea').focus();
+  await page.keyboard.type('custom input');await page.keyboard.press('Enter');
+  await page.waitForFunction(()=>Array.from({length:terminal.buffer.active.length},(_,i)=>terminal.buffer.active.getLine(i)?.translateToString()||'').join('\n').includes('Codex reply: custom input'));
+  await page.locator('#native-session').fill('custom-browser-chat');
+  await page.locator('#save-native-session').click();
+  await expect(page.locator('#native-status')).toContainText('chat saved for recovery');
+  await page.evaluate(()=>api(taskURL()+'/terminal/close',{}));
+  await page.reload();
+  await expect(page.locator('#native-status')).toContainText('Connected');
+  await page.waitForFunction(()=>Array.from({length:terminal.buffer.active.length},(_,i)=>terminal.buffer.active.getLine(i)?.translateToString()||'').join('\n').includes('Resume=custom-browser-chat'));
+  await page.locator('#return-native').click();
+  await page.locator('#stop').click();
+});

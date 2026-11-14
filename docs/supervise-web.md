@@ -265,3 +265,33 @@ account access. Entries explicitly marked hidden by the CLI are excluded.
 The **Add agents** form preloads model choices. Its model field shows a loading state
 until the initial catalogue response arrives, then displays the number of saved model
 choices. Choose an explicit **Codex model** from that dropdown or keep provider default.
+
+## Interactive CLI terminals and restart recovery
+
+Select an agent, open **Agent terminal**, then **Open Agent terminal**. The manager
+yields that agent after its current operation finishes; other agents continue. The real
+interactive CLI runs over a PTY with direct keyboard input, prompts, shortcuts and
+approvals. The separate **Conversation** view shows supervised turns.
+
+Built-in programs are Codex, Claude, Antigravity (`agy`) and Muse. Under **CLI & chat
+recovery**, choose **Custom command** for any other terminal program. Commands are
+parsed as executable arguments without shell evaluation; quote paths containing spaces.
+`{worktree}` expands to this agent's worktree. The program must be installed locally.
+
+Existing worker chat IDs are recovered from durable results. Codex discovers new IDs
+from matching local session headers; Claude allocates its new ID before launching.
+For a new Antigravity, Muse or custom chat, save the exact ID shown by that CLI using
+**Save chat ID**. Custom programs also require a resume command containing
+`{session_id}`, for example `my-agent resume {session_id}`. IDs are stored separately
+per provider/custom command. No adapter selects a global “last” conversation.
+
+Terminal processes end during computer shutdown. Restart the app with
+`scripts/supervise-web` and reopen the same browser workspace. The selected agent/tab
+are remembered; requested terminals reconnect or launch their saved resume command.
+The `.agent-loop` run state and the CLI's own history must remain on disk. Recovery
+cannot restore an unknown chat ID or an unsaved conversation for arbitrary programs.
+First use may show the CLI's normal trust or login prompt.
+
+**Return to supervisor** closes interactive control, preserves worktree edits and queues
+a verification/continuation turn. Automatic scheduling starts if needed. Interactive
+token usage is marked unreported in monitoring; the CLI displays its own usage.

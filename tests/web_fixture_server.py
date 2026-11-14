@@ -29,6 +29,14 @@ with tempfile.TemporaryDirectory(prefix='agent-loop-ui-') as temporary:
     fake.write_text('''#!/usr/bin/env python3
 import json, time, sys
 from pathlib import Path
+if '--json' not in sys.argv:
+ print(chr(27)+'[32mCodex interactive terminal'+chr(27)+'[0m',flush=True)
+ print('TTY='+str(sys.stdin.isatty() and sys.stdout.isatty()),flush=True)
+ print('Resume='+sys.argv[-1] if 'resume' in sys.argv else 'New chat',flush=True)
+ for line in sys.stdin:
+  if line.strip() == '/exit': break
+  print('Codex reply: '+line.strip(),flush=True)
+ sys.exit(0)
 if 'WATCH_WORKER_OUTPUT' in sys.argv[-1] and 'Read-only objective review.' not in sys.argv[-1]:
  print(json.dumps({'item':{'type':'agent_message','text':'Worker is running; live output is available.'}}),flush=True)
  time.sleep(6)
@@ -65,7 +73,7 @@ print(json.dumps({'type':'turn.completed','usage':usage}))
     app[APP_KEY].shell='/bin/sh'
     async def fixture(request):
         return web.json_response({'repo':str(repo.resolve()),'secondRepo':str(second_repo.resolve()),
-            'projectsFolder':str(root.resolve()),
+            'projectsFolder':str(root.resolve()), 'nativeCommand':__import__('shlex').quote(str(fake)),
             'acceptance':'python3 -B -c "from app import value; assert value == 2"'})
     app.router.add_get('/test-fixture',fixture)
     web.run_app(app,host='127.0.0.1',port=args.port)

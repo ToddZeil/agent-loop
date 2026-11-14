@@ -108,6 +108,18 @@ class SuperviseTests(unittest.TestCase):
         self.assertTrue(run._review(run.state(),[]))
         self.assertIn('model_reasoning_effort="high"',run.invoke.call_args.args[0])
 
+    def test_native_handoff_skips_its_keeper_but_keeps_other_agents_scheduled(self):
+        import fcntl
+        spec=json.loads(self.fleet.manifest.read_text());spec['tasks'][0]['terminal_requested']=True
+        self.fleet.manifest.write_text(json.dumps(spec))
+        run=self.run_for('one')
+        with run.path('keeper.lock').open('a') as owner:
+            fcntl.flock(owner,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            with mock.patch.object(SupervisedRun,'step',autospec=True) as step:
+                self.fleet.run(once=True)
+                step.assert_called_once()
+                self.assertEqual(step.call_args.args[0].id,self.run_for('two').id)
+
     def run_for(self, ident='one'):
         return next(run for task, run in self.fleet.runs() if task['id'] == ident)
 

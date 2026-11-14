@@ -129,6 +129,132 @@ class WebTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(updated['ui_revision'],'new-ui-version')
         self.assertGreater(updated['snapshot_revision'],initial['snapshot_revision'])
 
+    async def test_native_codex_terminal_has_real_pty_and_returns_control(self):
+        bindir=self.root/'bin';bindir.mkdir()
+        cli=bindir/'codex'
+        cli.write_text('''#!/usr/bin/env python3
+import sys
+print('Native Codex TTY='+str(sys.stdin.isatty() and sys.stdout.isatty()),flush=True)
+print('Resume='+sys.argv[-1],flush=True)
+for line in sys.stdin:
+ print('Reply: '+line.strip(),flush=True)
+''')
+        cli.chmod(0o755)
+        entry=await self.create()
+        run=self.controller.run_for(entry['id'],'fix')
+        state=run.state();state['session_id']='saved-native-chat';run.save_state(state)
+        endpoint=f"/api/fleets/{entry['id']}/tasks/fix"
+        with mock.patch.dict(os.environ,{'PATH':str(bindir)+os.pathsep+os.environ['PATH']}):
+            response=await self.post(endpoint+'/native/request',{})
+            self.assertEqual(response.status,200)
+            ws=await self.client.ws_connect(endpoint+'/terminal?mode=codex',headers={'Origin':self.origin})
+            data=await self.output_until(ws,b'Resume=saved-native-chat')
+            self.assertIn(b'TTY=True',data)
+            await ws.send_json({'type':'input','data':'hello\n'})
+            await self.output_until(ws,b'Reply: hello')
+            await ws.close()
+            ws=await self.client.ws_connect(endpoint+'/terminal?mode=codex',headers={'Origin':self.origin})
+            await self.output_until(ws,b'Resume=saved-native-chat')
+            self.assertEqual(run.load('native-session.json')['session_id'],'saved-native-chat')
+            with mock.patch.object(self.controller,'resume'):
+                response=await self.post(endpoint+'/native/release',{})
+            self.assertEqual(response.status,200,await response.text())
+            await ws.close()
+        spec=json.loads(self.controller.fleet(entry['id']).manifest.read_text())
+        self.assertFalse(spec['tasks'][0]['terminal_requested'])
+        self.assertIn('operator returned',run.path('inbox.jsonl').read_text())
+        self.assertEqual(run.load('native-session.json')['session_id'],'saved-native-chat')
+        from loop.usage import role_usage
+        self.assertEqual(role_usage(run.state(),'worker')['unreported_calls'],1)
+
+    async def test_arbitrary_cli_pty_saves_and_restores_exact_chat(self):
+        import shlex
+        import sys
+        cli=self.root/'custom cli.py'
+        cli.write_text("import sys\nprint('TTY='+str(sys.stdin.isatty()),flush=True)\nprint('ARGS='+repr(sys.argv[1:]),flush=True)\nfor line in sys.stdin: print('Custom reply: '+line.strip(),flush=True)\n")
+        entry=await self.create()
+        run=self.controller.run_for(entry['id'],'fix')
+        endpoint=f"/api/fleets/{entry['id']}/tasks/fix"
+        command=shlex.join([sys.executable,str(cli)])
+        response=await self.post(endpoint+'/native/request',{'program':'custom','command':command,
+            'resume_command':command+' --resume "{session_id}"'})
+        self.assertEqual(response.status,200,await response.text())
+        ws=await self.client.ws_connect(endpoint+'/terminal?mode=agent',headers={'Origin':self.origin})
+        await self.output_until(ws,b'TTY=True')
+        await ws.send_json({'type':'input','data':'direct custom input\n'})
+        await self.output_until(ws,b'Custom reply: direct custom input')
+        response=await self.post(endpoint+'/native/session',{'session_id':'custom-exact-chat'})
+        self.assertEqual(response.status,200,await response.text())
+        await ws.close()
+        await self.post(endpoint+'/terminal/close',{})
+        self.assertEqual(run.load('native-session.json')['session_id'],'custom-exact-chat')
+        self.assertIsNone(run.state().get('session_id'))
+        ws=await self.client.ws_connect(endpoint+'/terminal?mode=agent',headers={'Origin':self.origin})
+        await self.output_until(ws,b"ARGS=['--resume', 'custom-exact-chat']")
+        with mock.patch.object(self.controller,'resume'):
+            response=await self.post(endpoint+'/native/release',{})
+        self.assertEqual(response.status,200)
+        await ws.close()
+
+    async def test_new_native_chat_recovers_exact_id_after_server_restart(self):
+        bindir=self.root/'native-bin';bindir.mkdir()
+        cli=bindir/'codex'
+        cli.write_text(r'''#!/usr/bin/env python3
+import os,sys,json
+from pathlib import Path
+from datetime import datetime,timezone
+sid='00000000-0000-4000-8000-000000000001'
+if 'resume' in sys.argv:
+ print('Resumed='+sys.argv[-1],flush=True)
+else:
+ path=Path(os.environ['CODEX_HOME'])/'sessions/2026/01/01'
+ path.mkdir(parents=True,exist_ok=True)
+ (path/'new-native.jsonl').write_text(json.dumps({'type':'session_meta','payload':{'id':sid,'cwd':os.getcwd(),'source':'cli','timestamp':datetime.now(timezone.utc).isoformat()}})+'\n')
+ print('New native chat created',flush=True)
+for line in sys.stdin:
+ print('Reply: '+line.strip(),flush=True)
+''')
+        cli.chmod(0o755)
+        entry=await self.create();endpoint=f"/api/fleets/{entry['id']}/tasks/fix"
+        with mock.patch.dict(os.environ,{'PATH':str(bindir)+os.pathsep+os.environ['PATH'],'CODEX_HOME':str(self.root/'native-codex')}):
+            await self.post(endpoint+'/native/request',{})
+            ws=await self.client.ws_connect(endpoint+'/terminal?mode=codex',headers={'Origin':self.origin})
+            await self.output_until(ws,b'New native chat created')
+            run=self.controller.run_for(entry['id'],'fix')
+            async with asyncio.timeout(5):
+                while not run.path('native-session.json').exists(): await asyncio.sleep(.05)
+            self.assertEqual(run.load('native-session.json')['session_id'],'00000000-0000-4000-8000-000000000001')
+            workspace=str(run.worktree)
+            await ws.close()
+            await self.client.close()
+            self.app=create_app(self.root/'web');self.controller=self.app[APP_KEY]
+            self.client=TestClient(TestServer(self.app),cookie_jar=CookieJar(unsafe=True))
+            await self.client.start_server();self.addAsyncCleanup(self.client.close)
+            self.origin=str(self.client.make_url('/')).rstrip('/')
+            await self.client.get('/')
+            restored=self.controller.run_for(entry['id'],'fix')
+            self.assertEqual(str(restored.worktree),workspace)
+            ws=await self.client.ws_connect(endpoint+'/terminal?mode=codex',headers={'Origin':self.origin})
+            await self.output_until(ws,b'Resumed=00000000-0000-4000-8000-000000000001')
+            with mock.patch.object(self.controller,'resume'):
+                await self.post(endpoint+'/native/release',{})
+            await ws.close()
+
+    async def test_orphan_native_recovery_checks_registry_and_process_identity(self):
+        import signal
+        entry=await self.create();fleet=self.controller.fleet(entry['id'])
+        spec=json.loads(fleet.manifest.read_text());spec['tasks'][0]['terminal_requested']=True
+        fleet.manifest.write_text(json.dumps(spec))
+        run=self.controller.run_for(entry['id'],'fix')
+        state=run.state();state['interactive_session']={'server_home':str(self.controller.home),'pid':424242,'start_identity':'original-start'}
+        run.save_state(state)
+        with mock.patch('loop.web.process_identity',return_value='original-start'), mock.patch('loop.web.os.getpgid',return_value=424242), mock.patch('loop.web.os.killpg') as kill:
+            await self.controller.recover_native(self.app)
+            kill.assert_called_once_with(424242,signal.SIGTERM)
+        with mock.patch('loop.web.process_identity',return_value='reused-pid'), mock.patch('loop.web.os.killpg') as kill:
+            await self.controller.recover_native(self.app)
+            kill.assert_not_called()
+
     async def create(self):
         response = await self.post('/api/fleets',{'name':'Local test','manifest':self.manifest})
         self.assertEqual(response.status,201,await response.text())

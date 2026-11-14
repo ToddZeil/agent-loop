@@ -9,6 +9,8 @@ import os
 from pathlib import Path
 import pty
 import secrets
+import shlex
+import shutil
 import signal
 import struct
 import subprocess
@@ -21,9 +23,11 @@ from aiohttp import web, WSMsgType
 
 from .storage import atomic_json
 from .models import catalog, remember
+from .native import agent_terminal_command, discover_session, terminal_config, store_session, saved_session
+from .usage import record as record_usage
 from .usage import agent_usage, combine as combine_usage
 from .supervise import Fleet, EFFORTS
-from .worker import workspace_lock_path
+from .worker import workspace_lock_path, process_identity
 
 ROOT = Path(__file__).resolve().parent.parent
 ASSETS = ROOT / 'web'
@@ -68,7 +72,15 @@ def tail(path, limit=65536):
 
 
 class Terminal:
-    def __init__(self, run, shell):
+    def __init__(self, run, shell, mode='shell', owner_home=None):
+        self.mode = mode
+        self.run = run
+        self.session_id = None
+        self.provider = None
+        self.native_config = None
+        self.opened_at = time.time()
+        self.session_watch = None
+        self.observed_sessions = set()
         self.locks = ExitStack()
         self.buffer = bytearray()
         self.total = 0
@@ -87,18 +99,38 @@ class Terminal:
             state = run.state()
             if state['attempt'] or state['state'] in ('working', 'verifying', 'commit_pending'):
                 raise ValueError('Resume the manager to reconcile this task before opening a shell')
+            argv = [shell, '-i']
+            if mode != 'shell':
+                self.native_config = terminal_config(run)
+                argv, self.session_id, self.provider = agent_terminal_command(run, self.native_config)
             self.master, slave = pty.openpty()
             self.resize(100, 28)
             try:
                 # The server owns the locks; cleanup terminates the whole shell group.
                 self.process = subprocess.Popen(
-                    [sys.executable, str(ROOT / 'loop' / 'terminal_child.py'), shell],
+                    [sys.executable, str(ROOT / 'loop' / 'terminal_child.py'), *argv],
                     cwd=run.worktree, env={**os.environ, 'TERM': 'xterm-256color',
                                            'COLORTERM': 'truecolor'},
                     stdin=slave, stdout=slave, stderr=slave, start_new_session=True,
                     close_fds=True, pass_fds=(keeper_lock.fileno(), workspace_lock.fileno()))
             finally:
                 os.close(slave)
+            if mode != 'shell':
+                previous = state.get('interactive_session')
+                if previous:
+                    record_usage(state, 'worker', previous.get('provider', 'codex'), {}, 'interactive:' + previous['id'], model=state.get('model'), now=time.time())
+                state['interactive_session'] = {'id': uuid.uuid4().hex, 'session_id': self.session_id,
+                                                 'provider': self.provider, 'opened_at': time.time(), 'server_home': str(owner_home) if owner_home else None,
+                                                 'pid': self.process.pid, 'start_identity': process_identity(self.process.pid)}
+                if self.session_id and self.provider == state['provider']:
+                    state['session_id'] = self.session_id
+                    state.setdefault('sessions', {})[self.provider] = self.session_id
+                run.save_state(state)
+                if self.session_id:
+                    self.observed_sessions.add(self.session_id)
+                    store_session(run, self.provider, self.session_id, self.native_config, fresh=self.provider == 'claude' and '--session-id' in argv)
+                if self.provider == 'codex':
+                    self.session_watch = asyncio.create_task(self.watch_session())
             os.set_blocking(self.master, False)
             asyncio.get_running_loop().add_reader(self.master, self.read)
             self.reaper = asyncio.create_task(self.reap())
@@ -107,6 +139,30 @@ class Terminal:
                 os.close(self.master)
             self.locks.close()
             raise
+
+    async def capture_session(self):
+        if self.provider != 'codex':
+            return
+        session = await asyncio.to_thread(discover_session, self.run.worktree, self.opened_at, set(self.observed_sessions))
+        if session:
+            self.observed_sessions.add(session)
+            self.session_id = session
+            store_session(self.run, self.provider, session, self.native_config)
+            state = self.run.state()
+            if state.get('interactive_session'):
+                state['interactive_session']['session_id'] = session
+                if self.provider == state['provider']:
+                    state['session_id'] = session
+                    state.setdefault('sessions', {})[self.provider] = session
+                self.run.save_state(state)
+
+    async def watch_session(self):
+        while self.process.poll() is None:
+            try:
+                await self.capture_session()
+            except (OSError, ValueError):
+                pass
+            await asyncio.sleep(.5)
 
     def resize(self, cols, rows):
         if type(cols) is not int or type(rows) is not int or not 2 <= cols <= 500 or not 2 <= rows <= 300:
@@ -132,6 +188,12 @@ class Terminal:
 
     async def reap(self):
         await asyncio.to_thread(self.process.wait)
+        if self.session_watch:
+            await asyncio.gather(self.session_watch, return_exceptions=True)
+        try:
+            await self.capture_session()
+        except (OSError, ValueError):
+            pass
         self.read()
         self.exited = True
         self.event.set()
@@ -255,10 +317,11 @@ class Controller:
                 task.get('last_provider_status') in ('rate_limited', 'provider_wait')
                 or any(h.get('until', 0) > time.time() for h in task.get('provider_holds', {}).values())
                 or any(word in reason for word in ('quota', 'usage limit', 'usage reset')))
-            task['signal'] = ('stopping' if task['attempt'] else 'removed') if not task['enabled'] else (
+            task['signal'] = ('interactive' if task['terminal_open'] and task['terminal_mode'] != 'shell' else
+                              'handoff' if task['terminal_requested'] else ('stopping' if task['attempt'] else 'removed') if not task['enabled'] else (
                 'supervisor' if result['running'] and shared.get('busy') == run_ids[task['id']] else
                 'quota' if quota_wait else 'retrying' if task['state'] == 'waiting' and task['retry_at'] else
-                'blocked' if task.get('needs_help') or task['state'] == 'waiting' else task['state'])
+                'blocked' if task.get('needs_help') or task['state'] == 'waiting' else task['state']))
         agent_totals = combine_usage(t['usage']['agent'] for t in result['tasks'])
         supervisor_totals = combine_usage(t['usage']['supervisor'] for t in result['tasks'])
         result['usage'] = {'agents': agent_totals, 'supervisor': supervisor_totals,
@@ -273,6 +336,32 @@ class Controller:
             self.snapshot_body = body
         result.update(snapshot_epoch=self.snapshot_epoch, snapshot_revision=self.snapshot_revision)
         return result
+
+    async def recover_native(self, app):
+        # A crashed server loses the PTY master. Only terminate a recorded process
+        # belonging to this registry, with an exact process-start identity match.
+        for entry in self.entries():
+            try:
+                runs = list(Fleet(entry['home']).runs())
+            except (OSError, ValueError):
+                continue
+            for task, run in runs:
+                try:
+                    saved = run.state().get('interactive_session') or {}
+                except (OSError, ValueError):
+                    continue
+                if not task.get('terminal_requested') or saved.get('server_home') != str(self.home):
+                    continue
+                pid, identity = saved.get('pid'), saved.get('start_identity')
+                if type(pid) is not int or pid <= 1 or not identity:
+                    continue
+                current = await asyncio.to_thread(process_identity, pid)
+                if current == identity:
+                    try:
+                        if os.getpgid(pid) == pid:
+                            os.killpg(pid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
 
     async def guardian(self, app):
         async def watch():
@@ -385,7 +474,8 @@ class Controller:
             try:
                 fleet = Fleet(entry['home'])
                 tasks = fleet.status()
-                goals = {task['id']: task['goal'] for task in json.loads(fleet.manifest.read_text())['tasks']}
+                task_specs = {task['id']: task for task in json.loads(fleet.manifest.read_text())['tasks']}
+                goals = {ident: task['goal'] for ident, task in task_specs.items()}
                 runs = {task['id']: run for task, run in fleet.runs()}
                 for task in tasks:
                     task['goal'] = goals.get(task['id'], '')
@@ -396,6 +486,17 @@ class Controller:
                     task.pop('token_usage', None)
                     terminal = self.terminals.get((entry['id'], task['id']))
                     task['terminal_open'] = bool(terminal and not terminal.exited)
+                    task['terminal_mode'] = terminal.mode if task['terminal_open'] else None
+                    task['terminal_requested'] = bool(task_specs[task['id']].get('terminal_requested'))
+                    native = terminal_config(runs[task['id']])
+                    task['native_config'] = {**native, 'command_text': shlex.join(native.get('command', [])),
+                                              'resume_text': shlex.join(native.get('resume_command', []))}
+                    task['native_provider'] = native['provider']
+                    active = task.get('interactive_session') or {}
+                    task['native_session_id'] = (active.get('session_id') if active.get('provider', 'codex') == native['provider'] else None) or saved_session(runs[task['id']], native['provider'], native).get('session_id')
+                    task['native_ready'] = bool(task['terminal_requested'] and not task['attempt']
+                        and task['state'] not in ('working', 'verifying', 'commit_pending')
+                        and not lock_held(runs[task['id']].path('keeper.lock')))
                 results.append({**entry, 'running': self.running(entry), 'tasks': tasks,
                                 'supervisor': json.loads(fleet.manifest.read_text())['supervisor']})
             except (OSError, ValueError, RuntimeError) as exc:
@@ -420,11 +521,13 @@ class Controller:
             raise ValueError('Unknown fleet')
         if self.running(entry):
             raise ValueError('The manager is already running')
-        if any(key[0] == ident and not terminal.exited for key, terminal in self.terminals.items()):
+        if any(key[0] == ident and not terminal.exited and terminal.mode == 'shell' for key, terminal in self.terminals.items()):
             raise ValueError('Close the task terminal before resuming workers')
         fleet = Fleet(entry['home'])
         # Refuse takeover of an externally opened keeper or workspace as well.
-        for _, run in fleet.runs():
+        for task, run in fleet.runs():
+            if task.get('terminal_requested'):
+                continue
             if lock_held(run.path('keeper.lock')):
                 raise ValueError('A task keeper or terminal already owns this run')
         with (fleet.home / 'manager.log').open('ab') as log:
@@ -567,6 +670,11 @@ async def supervisor_agent_action(request):
     c = request.app[APP_KEY]
     async with c.mutation:
         fleet = c.fleet(c.supervisor()['id'])
+        if request.match_info['op'] == 'remove':
+            spec = json.loads(fleet.manifest.read_text())
+            task = next((t for t in spec['tasks'] if t['id'] == request.match_info['task']), {})
+            if task.get('terminal_requested'):
+                raise ValueError('Return the interactive terminal before removing this agent')
         fleet.enable_agent(request.match_info['task'], request.match_info['op'] == 'restore')
     return web.json_response({'ok': True, 'applies': 'current turn finishes; no new turn is launched'})
 
@@ -820,6 +928,82 @@ async def logs(request):
     return web.json_response({'output': tail(c.fleet(request.match_info['fleet']).home / 'manager.log')})
 
 
+async def native_action(request):
+    c = request.app[APP_KEY]
+    key = (request.match_info['fleet'], request.match_info['task'])
+    start_error = None
+    body = await object_body(request)
+    async with c.mutation:
+        fleet = c.fleet(key[0])
+        spec = json.loads(fleet.manifest.read_text())
+        task = next((t for t in spec['tasks'] if t['id'] == key[1]), None)
+        if not task:
+            raise ValueError('Unknown agent')
+        run = c.run_for(*key)
+        terminal = c.terminals.get(key)
+        if request.match_info['op'] in ('request', 'session'):
+            if not run.worktree.is_dir():
+                raise ValueError('This agent worktree is missing; restore it before reopening its CLI')
+            config = terminal_config(run, body)
+            old_config = terminal_config(run)
+            if task.get('terminal_requested') and config != old_config:
+                raise ValueError('Return the terminal before changing its program')
+            run.save('native-config.json', config)
+            session = body.get('session_id')
+            if session is not None:
+                if not isinstance(session, str) or not session.strip() or len(session) > 300 or '\x00' in session:
+                    raise ValueError('Enter the exact session ID')
+                if config['provider'] == 'custom' and not config.get('resume_command'):
+                    raise ValueError('Set a resume command with {session_id} before saving a custom chat')
+                store_session(run, config['provider'], session.strip(), config, manual=True)
+                if terminal and terminal.mode != 'shell':
+                    terminal.session_id = session.strip()
+                    terminal.observed_sessions.add(session.strip())
+                    state = run.state()
+                    state['interactive_session']['session_id'] = session.strip()
+                    if config['provider'] == state['provider']:
+                        state['session_id'] = session.strip()
+                        state.setdefault('sessions', {})[config['provider']] = session.strip()
+                    run.save_state(state)
+            if request.match_info['op'] == 'session':
+                return web.json_response({'ok': True})
+            argv, _, _ = agent_terminal_command(run, config)
+            if not shutil.which(argv[0]):
+                raise ValueError('CLI executable not found: ' + argv[0])
+            if not task.get('enabled', True):
+                raise ValueError('Restore this agent before opening its terminal')
+            if terminal and not terminal.exited and terminal.mode == 'shell':
+                raise ValueError('Close the worktree shell before opening an agent CLI')
+            task['terminal_requested'] = True
+            atomic_json(fleet.manifest, spec)
+        else:
+            opened = run.state().get('interactive_session')
+            if terminal:
+                if terminal.mode == 'shell':
+                    raise ValueError('This agent has a worktree shell open')
+                await terminal.close()
+                c.terminals.pop(key, None)
+            if opened:
+                state = run.state()
+                state.pop('interactive_session', None)
+                record_usage(state, 'worker', opened.get('provider', 'codex'), {}, 'interactive:' + opened['id'],
+                             model=state.get('model'), now=time.time())
+                run.save_state(state)
+                run.note('The operator returned the interactive agent terminal. Inspect and verify the current worktree; preserve manual changes and finish the objective.')
+            task['terminal_requested'] = False
+            if opened:
+                spec['desired_running'] = True
+                (fleet.home / 'stop').unlink(missing_ok=True)
+            atomic_json(fleet.manifest, spec)
+            if opened and not c.running(c.entry(key[0])):
+                try:
+                    c.resume(key[0])
+                except (OSError, ValueError, RuntimeError) as exc:
+                    atomic_json(fleet.manifest, {**spec, 'desired_running': False})
+                    start_error = str(exc)
+    return web.json_response({'ok': True, 'start_error': start_error})
+
+
 async def terminal_close(request):
     c = request.app[APP_KEY]
     key = (request.match_info['fleet'], request.match_info['task'])
@@ -839,14 +1023,24 @@ async def terminal_socket(request):
     key = (request.match_info['fleet'], request.match_info['task'])
     async with c.mutation:
         run = c.run_for(*key)
-        if c.running(c.entry(key[0])):
+        mode = request.query.get('mode', 'shell')
+        if mode not in ('shell', 'codex', 'agent'):
+            raise ValueError('Unknown terminal mode')
+        if mode != 'shell':
+            spec = json.loads(c.fleet(key[0]).manifest.read_text())
+            task = next(t for t in spec['tasks'] if t['id'] == key[1])
+            if not task.get('terminal_requested'):
+                raise ValueError('Request the interactive terminal first')
+        elif c.running(c.entry(key[0])):
             raise ValueError('Stop the manager and reconcile active workers before opening a shell')
         terminal = c.terminals.get(key)
         if terminal and terminal.exited:
             await terminal.close()
             terminal = None
+        if terminal and terminal.mode != mode:
+            raise ValueError('Close the other terminal before switching modes')
         if terminal is None:
-            terminal = Terminal(run, c.shell)
+            terminal = Terminal(run, c.shell, mode, c.home)
             c.terminals[key] = terminal
         if terminal.ws and not terminal.ws.closed:
             raise ValueError('This terminal is attached in another browser tab')
@@ -916,6 +1110,8 @@ def create_app(home):
     app.router.add_get('/api/fleets/{fleet}/logs', logs)
     app.router.add_get('/api/fleets/{fleet}/tasks/{task}/terminal', terminal_socket)
     app.router.add_post('/api/fleets/{fleet}/tasks/{task}/terminal/close', terminal_close)
+    app.router.add_post('/api/fleets/{fleet}/tasks/{task}/native/{op:request|release|session}', native_action)
+    app.on_startup.append(app[APP_KEY].recover_native)
     app.on_startup.append(app[APP_KEY].guardian)
     app.on_shutdown.append(app[APP_KEY].shutdown)
     app.on_cleanup.append(app[APP_KEY].cleanup)

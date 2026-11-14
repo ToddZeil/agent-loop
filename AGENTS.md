@@ -11,9 +11,11 @@ and detached execution is in `loop/worker.py`.
 do not appear in the supervisor workspace. When working on Add agents, model/effort
 selection, worker conversations, or local terminals, start with `web/` and `loop/web.py`.
 
-The readable worker conversation forwards structured provider output. Writable shells
-are separate PTY sessions. Messages to supervised workers are queued for their next turn;
-they do not type into an active provider process.
+The Conversation view forwards structured provider output. The Agent terminal tab
+opens the real interactive CLI over a PTY, yielding only that agent at a turn boundary.
+Its chat ID and worktree are persisted for recovery. The separate worktree shell is
+also a PTY. Messages in the web composer are queued for the next supervised turn;
+keystrokes in the Agent terminal go directly to the interactive CLI.
 
 ## Development and validation
 
