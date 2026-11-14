@@ -595,11 +595,20 @@ function applySupervisor(supervisor) {
 }
 function renderArchived(tasks) {
   $('removed-agents').hidden = tasks.length === 0;
-  $('archived-agents').innerHTML = tasks.length ? tasks.map(t=>`<button class="button quiet" data-restore="${escapeHTML(t.id)}">↶ ${escapeHTML(agentName(t))}</button>`).join('') : '<small class="muted">None</small>';
+  $('archived-agents').innerHTML = tasks.length ? tasks.map(t=>`<button class="button quiet" data-restore="${escapeHTML(t.id)}">↶ ${escapeHTML(agentName(t))}</button><button class="button small danger" data-delete="${escapeHTML(t.id)}">Delete &amp; clean up ${escapeHTML(agentName(t))}</button>`).join('') : '<small class="muted">None</small>';
+  $('archived-agents').querySelectorAll('[data-delete]').forEach(button => button.onclick = () => deleteAgent(button.dataset.delete));
   $('archived-agents').querySelectorAll('[data-restore]').forEach(button=>button.onclick=async()=>{
     try { await api(`/supervisor/agents/${encodeURIComponent(button.dataset.restore)}/restore`,{}); await refresh(); toast('Agent restored.'); } catch(e) { toast(e.message,true); }
   });
 }
+async function deleteAgent(id) {
+  if (!window.confirm(`Permanently delete agent "${id}"? This discards all uncommitted files and commits on its worker branch, its worktree, and saved conversation/run history. This cannot be undone. The project repository is kept.`)) return;
+  try {
+    await api(`/supervisor/agents/${encodeURIComponent(id)}/delete`, {confirm:true});
+    await refresh(); toast('Agent deleted; worktree, worker branch and saved history cleaned up.');
+  } catch(e) { toast(e.message,true); }
+}
+$('delete-agent').onclick = () => deleteAgent(selectedTask);
 $('remove-agent').onclick = async () => {
   try { await api(`/supervisor/agents/${encodeURIComponent(selectedTask)}/remove`,{}); await refresh(); toast('Agent removed from scheduling. Its current turn finishes; files are kept.'); }
   catch(e) { toast(e.message,true); }

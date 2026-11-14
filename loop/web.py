@@ -684,6 +684,43 @@ async def supervisor_agent_action(request):
     return web.json_response({'ok': True, 'applies': 'current turn finishes; no new turn is launched'})
 
 
+async def supervisor_agent_delete(request):
+    c = request.app[APP_KEY]
+    body = await object_body(request)
+    if body.get('confirm') is not True:
+        raise ValueError('Confirm permanent deletion and cleanup')
+    async with c.mutation:
+        entry = c.supervisor()
+        fleet = c.fleet(entry['id'])
+        spec = json.loads(fleet.manifest.read_text())
+        task = next((t for t in spec['tasks'] if t['id'] == request.match_info['task']), None)
+        if task is None:
+            raise ValueError('Unknown agent')
+        if c.running(entry):
+            raise ValueError('Stop scheduling and wait for the supervisor to stop before deleting an agent')
+        run = c.run_for(entry['id'], task['id'])
+        terminal = c.terminals.get((entry['id'], task['id']))
+        if task.get('terminal_requested') or (terminal and not terminal.exited):
+            raise ValueError('Close the worktree shell and return the Agent terminal before deleting')
+        if run.state().get('attempt'):
+            raise ValueError('Wait for the current worker turn to finish before deleting')
+        with ExitStack() as locks:
+            locks.enter_context(locked(fleet.home / 'fleet.lock'))
+            locks.enter_context(locked(run.path('keeper.lock')))
+            lock_path = workspace_lock_path(run.dir, run.worktree)
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            locks.enter_context(locked(lock_path))
+            # Git validates worktree ownership; never recursively delete a supplied path.
+            if run.worktree.exists():
+                await asyncio.to_thread(deploy.git, run.repo, 'worktree', 'remove', '--force', str(run.worktree))
+            if deploy.git(run.repo, 'branch', '--list', run.branch):
+                await asyncio.to_thread(deploy.git, run.repo, 'branch', '-D', run.branch)
+            shutil.rmtree(run.dir)
+            atomic_json(fleet.manifest, {**spec, 'tasks': [t for t in spec['tasks'] if t['id'] != task['id']]})
+        c.terminals.pop((entry['id'], task['id']), None)
+    return web.json_response({'ok': True})
+
+
 async def supervisor_action(request):
     c = request.app[APP_KEY]
     async with c.mutation:
@@ -1134,6 +1171,7 @@ def create_app(home):
     app.router.add_get('/api/events', supervisor_events)
     app.router.add_post('/api/supervisor/settings', supervisor_settings)
     app.router.add_post('/api/supervisor/agents', supervisor_agents)
+    app.router.add_post('/api/supervisor/agents/{task}/delete', supervisor_agent_delete)
     app.router.add_post('/api/supervisor/agents/{task}/{op:remove|restore}', supervisor_agent_action)
     app.router.add_post('/api/supervisor/{op:resume|stop}', supervisor_action)
     app.router.add_post('/api/supervisor/import', supervisor_import)
