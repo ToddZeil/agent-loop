@@ -69,6 +69,12 @@ test('add another agent to the running supervisor through advanced manifest; mob
   await expect(page.locator('#task-title')).toHaveText('manifest-worker');
   await expect(page.locator('#stat-total')).toHaveText('2');
   expect(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth)).toBe(false);
+  const cards = page.locator('.worker-card');
+  await expect(cards).toHaveCount(2);
+  const first = await cards.nth(0).boundingBox();
+  const second = await cards.nth(1).boundingBox();
+  expect(second.y).toBeGreaterThanOrEqual(first.y + first.height);
+  expect(Math.abs(first.x - second.x)).toBeLessThan(1);
   await page.screenshot({path:path.resolve(__dirname,'../../.agent-loop/web-mobile.png'),fullPage:true});
 });
 
