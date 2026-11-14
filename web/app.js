@@ -150,6 +150,7 @@ function render() {
   $('workers').querySelectorAll('button').forEach(b => b.onclick = () => chooseTask(b.dataset.task));
   const task = currentTask();
   if (!task) return;
+  if (!$('full-access').disabled) $('full-access').checked = task.full_access !== false;
   if (!$('allow-subagents').disabled) $('allow-subagents').checked = !!task.allow_subagents;
   const modelKey = `${selectedTask}/${task.provider}/${task.model || ''}`;
   if ($('agent-model').dataset.key !== modelKey) {
@@ -338,6 +339,12 @@ async function fleetAction(action) {
 }
 $('worker-search').oninput = () => render();
 $('resume').onclick = () => fleetAction('resume'); $('stop').onclick = () => fleetAction('stop');
+$('full-access').onchange = async event => {
+  const checkbox=event.currentTarget,value=checkbox.checked;checkbox.disabled=true;
+  try {await api(taskURL()+'/settings',{full_access:value});toast('Permissions saved. Applies next worker turn or after reopening its terminal.');await refresh();}
+  catch(e){checkbox.checked=!value;toast(e.message,true);}
+  finally{checkbox.disabled=false;}
+};
 $('allow-subagents').onchange = async event => {
   const checkbox = event.currentTarget, value = checkbox.checked;
   checkbox.disabled = true;
@@ -450,7 +457,7 @@ function agentField(row,field) { return row.querySelector(`[data-field="${field}
 function addTask() {
   do { taskNumber++; } while(currentFleet()?.tasks.some(t => t.id === `task-${taskNumber}`));
   const row = document.createElement('section'); row.className = 'task-fields'; row.dataset.defaultId = `task-${taskNumber}`;
-  row.innerHTML = `<div class="task-field-head"><span>AGENT ${String(taskNumber).padStart(2,'0')}</span><button type="button" class="icon-button remove-task" aria-label="Remove agent form">×</button></div><label>Saved project<select data-field="project" aria-label="Saved project"><option value="">Choose a saved repository, or enter a path…</option></select></label><label data-manual-repo>Repository root<input data-field="repo" placeholder="/Users/you/projects/app" required></label><label>Goal<textarea data-field="goal" rows="3" placeholder="What would you like this agent to do?" required></textarea></label><div class="form-row"><label>Worker provider<select data-field="provider"><option>codex</option><option>claude</option><option>antigravity</option><option>muse</option></select></label><label>Model<input data-field="model" placeholder="Provider default"></label></div><label>Worker effort<select data-field="effort" aria-label="Worker effort"><option>medium</option></select></label><label class="subagent-option"><input type="checkbox" data-field="allow-subagents"> Allow subagents</label><small class="muted">All project files · supervisor reviews the result</small>`;
+  row.innerHTML = `<div class="task-field-head"><span>AGENT ${String(taskNumber).padStart(2,'0')}</span><button type="button" class="icon-button remove-task" aria-label="Remove agent form">×</button></div><label>Saved project<select data-field="project" aria-label="Saved project"><option value="">Choose a saved repository, or enter a path…</option></select></label><label data-manual-repo>Repository root<input data-field="repo" placeholder="/Users/you/projects/app" required></label><label>Goal<textarea data-field="goal" rows="3" placeholder="What would you like this agent to do?" required></textarea></label><div class="form-row"><label>Worker provider<select data-field="provider"><option>codex</option><option>claude</option><option>antigravity</option><option>muse</option></select></label><label>Model<input data-field="model" placeholder="Provider default"></label></div><label>Worker effort<select data-field="effort" aria-label="Worker effort"><option>medium</option></select></label><label class="subagent-option"><input type="checkbox" data-field="full-access" checked> Full access · no permission prompts</label><label class="subagent-option"><input type="checkbox" data-field="allow-subagents"> Allow subagents</label><small class="muted">All project files · supervisor reviews the result</small>`;
   const options = document.createElement('section'); options.className = 'task-options'; row._options = options;
   options.innerHTML = `<h4>Agent ${String(taskNumber).padStart(2,'0')}</h4><label>Agent ID<input data-field="id" value="${row.dataset.defaultId}" pattern="[a-z0-9](?:[a-z0-9]|-){0,60}" placeholder="Generated automatically"></label><label>Verification command (optional)<input data-field="check" placeholder="For example: npm test"></label><small class="muted">Leave empty to use supervisor review.</small><div class="form-row"><label>Fallback provider<select data-field="fallback"><option value="">Wait for quota reset</option><option>codex</option><option>claude</option><option>antigravity</option><option>muse</option></select></label><label>Fallback model<input data-field="fallback-model" placeholder="Provider default"></label></div>`;
   row.querySelector('.remove-task').onclick = () => { if ($('task-fields').children.length > 1) { options.remove(); row.remove(); } else toast('Add at least one agent.', true); };
@@ -489,7 +496,7 @@ $('create-form').onsubmit = async event => {
       const provider = get('provider'), fallback = get('fallback'), workers = [provider], worker_models = {};
       if (get('model')) worker_models[provider] = get('model');
       if (fallback && fallback !== provider) { workers.push(fallback); if (get('fallback-model')) worker_models[fallback] = get('fallback-model'); }
-      return {id:get('id') || row.dataset.defaultId,repo:get('repo'),goal:get('goal'),acceptance:get('check') ? [get('check')] : [],options:{workers,worker_models,worker_effort:get('effort'),allow_subagents:row.querySelector('[data-field=allow-subagents]').checked}};
+      return {id:get('id') || row.dataset.defaultId,repo:get('repo'),goal:get('goal'),acceptance:get('check') ? [get('check')] : [],options:{workers,worker_models,worker_effort:get('effort'),full_access:row.querySelector('[data-field=full-access]').checked,allow_subagents:row.querySelector('[data-field=allow-subagents]').checked}};
     });
     for (const task of tasks) for (const [provider, model] of Object.entries(task.options?.worker_models || {})) await saveModel(provider, model);
     const result = await api('/supervisor/agents',{tasks,start:button.value === 'start'});

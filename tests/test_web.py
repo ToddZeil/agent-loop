@@ -129,6 +129,34 @@ class WebTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(updated['ui_revision'],'new-ui-version')
         self.assertGreater(updated['snapshot_revision'],initial['snapshot_revision'])
 
+    async def test_agent_full_access_defaults_and_persistent_opt_out(self):
+        entry=await self.create()
+        endpoint=f"/api/fleets/{entry['id']}/tasks/fix/settings"
+        tasks=self.controller.status()[0]['tasks']
+        self.assertTrue(tasks[0]['full_access'])
+        response=await self.post(endpoint,{'full_access':False})
+        self.assertEqual(response.status,200)
+        run=self.controller.run_for(entry['id'],'fix')
+        self.assertFalse(run.config['full_access'])
+        self.assertFalse(self.controller.status()[0]['tasks'][0]['full_access'])
+        response=await self.post(endpoint,{'full_access':'yes'})
+        self.assertEqual(response.status,400)
+        self.assertFalse(run.config['full_access'])
+
+    async def test_terminal_request_restarts_stopped_manager_to_reconcile_pending_turn(self):
+        import sys
+        entry=await self.create()
+        run=self.controller.run_for(entry['id'],'fix')
+        state=run.state();state.update(state='working',attempt='pending-turn');run.save_state(state)
+        endpoint=f"/api/fleets/{entry['id']}/tasks/fix/native/request"
+        with mock.patch.object(self.controller,'resume') as resume:
+            response=await self.post(endpoint,{'program':'custom','command':[sys.executable,'-i']})
+        self.assertEqual(response.status,200,await response.text())
+        resume.assert_called_once_with(entry['id'])
+        spec=json.loads(self.controller.fleet(entry['id']).manifest.read_text())
+        self.assertTrue(spec['desired_running'])
+        self.assertTrue(spec['tasks'][0]['terminal_requested'])
+
     async def test_native_codex_terminal_has_real_pty_and_returns_control(self):
         bindir=self.root/'bin';bindir.mkdir()
         cli=bindir/'codex'

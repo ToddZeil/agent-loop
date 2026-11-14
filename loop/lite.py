@@ -42,6 +42,7 @@ DEFAULTS = {
     "supervisor_escalation": {"codex": "gpt-6-astra"},
     "supervisor_effort": "medium",
     "worker_effort": None,
+    "full_access": True,
     # Preferred supervisor: after a fallback the keeper returns to it as soon as it is usable.
     "supervisor_home": None,
     # Worker model catalog: the only models a dispatch may use. The supervisor picks
@@ -919,7 +920,8 @@ class LiteRun:
         # omits the flag when an Antigravity model already encodes its effort.
         effort = config.get("worker_effort") or entry.get("effort") or action.get("effort")
         argv = command(provider, prompt, model, effort,
-                       worker=True, workspace=self.worktree, scope="worktree")
+                       worker=True, workspace=self.worktree, scope="worktree",
+                       full_access=config.get("full_access", True))
         head = git(self.worktree, "rev-parse", "HEAD")
         stamp = time.strftime("%Y%m%d-%H%M%S")
         log = self.dir / "logs" / ("%s-%s-%s.jsonl" % (task["id"], stamp, provider))

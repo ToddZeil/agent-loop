@@ -295,3 +295,13 @@ First use may show the CLI's normal trust or login prompt.
 **Return to supervisor** closes interactive control, preserves worktree edits and queues
 a verification/continuation turn. Automatic scheduling starts if needed. Interactive
 token usage is marked unreported in monitoring; the CLI displays its own usage.
+
+Managed agents use **Full access · no permission prompts** by default, including
+existing agents without an explicit preference. Codex runs with `danger-full-access`
+and approval `never`; Claude and Antigravity bypass tool permission prompts; Muse
+disables its shell sandbox and approval prompts. Change this per agent in **Agent
+settings**, or during creation. Changes apply next worker turn or after reopening an
+interactive terminal. Custom CLI commands must include their own permission options.
+Full access grants the local CLI the filesystem, network and command access of the
+account running this app. Normal login/trust and model clarification questions can
+still appear.

@@ -255,6 +255,7 @@ class ContinuousRun(LiteRun):
                   "session_id": state["session_id"], "worker_idle_timeout_seconds": self.config["worker_idle_seconds"],
                   "worker_max_seconds": self.config["worker_max_seconds"],
                   "task": {"provider": state["provider"], "model": state["model"], "effort": (self.config.get("worker_effort") or "medium"),
+                           "full_access": self.config.get("full_access", True),
                            "allow_subagents": self.config.get("allow_subagents", False)}}
         path = self.path("attempts") / (attempt_id + ".json")
         atomic_json(path, record)

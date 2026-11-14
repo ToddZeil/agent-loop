@@ -16,6 +16,10 @@ opens the real interactive CLI over a PTY, yielding only that agent at a turn bo
 Its chat ID and worktree are persisted for recovery. The separate worktree shell is
 also a PTY. Messages in the web composer are queued for the next supervised turn;
 keystrokes in the Agent terminal go directly to the interactive CLI.
+Managed workers and native terminals default to full access without tool approval
+prompts. The per-agent `full_access` setting is captured in each worker attempt;
+permission changes apply next turn or after reopening the interactive terminal.
+Custom CLI commands supply their own permission flags.
 
 ## Development and validation
 

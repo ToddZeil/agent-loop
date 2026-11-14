@@ -480,6 +480,7 @@ class Controller:
                 for task in tasks:
                     task['goal'] = goals.get(task['id'], '')
                     config = runs[task['id']].config
+                    task['full_access'] = config.get('full_access', True)
                     task['allow_subagents'] = config.get('allow_subagents', False)
                     task['worker_effort'] = config.get('worker_effort') or 'medium'
                     task['usage'] = agent_usage(task, config)
@@ -866,6 +867,8 @@ async def task_settings(request):
     body = await object_body(request)
     if 'allow_subagents' in body and type(body['allow_subagents']) is not bool:
         raise ValueError('allow_subagents must be a boolean')
+    if 'full_access' in body and type(body['full_access']) is not bool:
+        raise ValueError('full_access must be a boolean')
     if 'worker_effort' in body and body['worker_effort'] not in EFFORTS:
         raise ValueError('Unsupported worker effort')
     if 'model' in body and (not isinstance(body['model'], str) or len(body['model']) > 200):
@@ -873,6 +876,8 @@ async def task_settings(request):
     async with c.mutation:
         run = c.run_for(request.match_info['fleet'], request.match_info['task'])
         config = run.load('config.json', {})
+        if 'full_access' in body:
+            config['full_access'] = body['full_access']
         if 'worker_effort' in body:
             config['worker_effort'] = body['worker_effort']
         if 'allow_subagents' in body:
@@ -975,7 +980,14 @@ async def native_action(request):
             if terminal and not terminal.exited and terminal.mode == 'shell':
                 raise ValueError('Close the worktree shell before opening an agent CLI')
             task['terminal_requested'] = True
+            state = run.state()
+            reconcile = bool(state.get('attempt') or state['state'] in ('working', 'verifying', 'commit_pending'))
+            if reconcile:
+                spec['desired_running'] = True
+                (fleet.home / 'stop').unlink(missing_ok=True)
             atomic_json(fleet.manifest, spec)
+            if reconcile and not c.running(c.entry(key[0])):
+                c.resume(key[0])  # Drain/reconcile the existing turn before yielding its locks.
         else:
             opened = run.state().get('interactive_session')
             if terminal:

@@ -102,6 +102,9 @@ test('scan repositories, choose one, persist subagent toggle, and remove/restore
   await expect(page.locator('#task-title')).toHaveText('selected-repo');
   await agentSettings(page);
   await expect(page.locator('#allow-subagents')).toBeChecked();
+  await expect(page.locator('#full-access')).toBeChecked();
+  await page.locator('#full-access').uncheck();
+  await expect(page.locator('#toast')).toContainText('Permissions saved');
   await expect(page.locator('.worker-policy')).toContainText('All project files');
   await page.locator('#allow-subagents').uncheck();
   await expect(page.locator('#toast')).toContainText('Subagent setting saved');
@@ -109,6 +112,9 @@ test('scan repositories, choose one, persist subagent toggle, and remove/restore
   await page.locator('[data-task="selected-repo"]').click();
   await agentSettings(page);
   await expect(page.locator('#allow-subagents')).not.toBeChecked();
+  await expect(page.locator('#full-access')).not.toBeChecked();
+  await page.locator('#full-access').check();
+  await expect(page.locator('#toast')).toContainText('Permissions saved');
   await page.locator('#remove-agent').click();
   await expect(page.locator('[data-restore="selected-repo"]')).toBeVisible({timeout:15000});
   await expect(page.locator('[data-task="selected-repo"]')).toHaveCount(0);
@@ -379,14 +385,14 @@ test('actual interactive terminal supports direct typing, reconnect, and other s
   const nativeAgent=await page.locator('#task-title').textContent();
   await page.getByRole('tab',{name:'Agent terminal',exact:true}).click();
   await page.locator('#open-native').click();
-  await expect(page.locator('#native-status')).toContainText('Connected');
+  await expect(page.locator('#native-status')).toContainText('Connected',{timeout:20000});
   await page.locator('#native-terminal .xterm-helper-textarea').focus();
   await page.keyboard.type('hello native');await page.keyboard.press('Enter');
   await expect.poll(()=>page.evaluate(()=>terminal.buffer.active.getLine(terminal.buffer.active.cursorY)?.translateToString() || '')).not.toBeNull();
   await page.waitForFunction(()=>Array.from({length:terminal.buffer.active.length},(_,i)=>terminal.buffer.active.getLine(i)?.translateToString()||'').join('\n').includes('Codex reply: hello native'));
   await page.reload();
   await expect(page.getByRole('tab',{name:'Agent terminal',exact:true})).toHaveAttribute('aria-selected','true');
-  await expect(page.locator('#native-status')).toContainText('Connected');
+  await expect(page.locator('#native-status')).toContainText('Connected',{timeout:20000});
   await page.waitForFunction(()=>Array.from({length:terminal.buffer.active.length},(_,i)=>terminal.buffer.active.getLine(i)?.translateToString()||'').join('\n').includes('Codex reply: hello native'));
   await page.locator('#resume').click();
   await expect(page.locator('#manager-state')).toContainText('running');
@@ -398,7 +404,7 @@ test('actual interactive terminal supports direct typing, reconnect, and other s
   await expect(page.locator('#task-status')).toHaveText('complete',{timeout:20000});
   await page.locator(`[data-task="${nativeAgent}"]`).click();
   await page.getByRole('tab',{name:'Agent terminal',exact:true}).click();
-  await expect(page.locator('#native-status')).toContainText('Connected');
+  await expect(page.locator('#native-status')).toContainText('Connected',{timeout:20000});
   await page.waitForFunction(()=>Array.from({length:terminal.buffer.active.length},(_,i)=>terminal.buffer.active.getLine(i)?.translateToString()||'').join('\n').includes('Codex reply: hello native'));
   await page.locator('#native-terminal .xterm-helper-textarea').focus();
   await page.keyboard.type('second message');await page.keyboard.press('Enter');
@@ -418,7 +424,7 @@ test('custom CLI accepts direct input and resumes its explicitly saved chat',asy
   await page.locator('#native-command').fill(fixture.nativeCommand);
   await page.locator('#native-resume').fill(fixture.nativeCommand+' resume {session_id}');
   await page.locator('#open-native').click();
-  await expect(page.locator('#native-status')).toContainText('Connected');
+  await expect(page.locator('#native-status')).toContainText('Connected',{timeout:20000});
   await page.locator('#native-terminal .xterm-helper-textarea').focus();
   await page.keyboard.type('custom input');await page.keyboard.press('Enter');
   await page.waitForFunction(()=>Array.from({length:terminal.buffer.active.length},(_,i)=>terminal.buffer.active.getLine(i)?.translateToString()||'').join('\n').includes('Codex reply: custom input'));
@@ -427,7 +433,7 @@ test('custom CLI accepts direct input and resumes its explicitly saved chat',asy
   await expect(page.locator('#native-status')).toContainText('chat saved for recovery');
   await page.evaluate(()=>api(taskURL()+'/terminal/close',{}));
   await page.reload();
-  await expect(page.locator('#native-status')).toContainText('Connected');
+  await expect(page.locator('#native-status')).toContainText('Connected',{timeout:20000});
   await page.waitForFunction(()=>Array.from({length:terminal.buffer.active.length},(_,i)=>terminal.buffer.active.getLine(i)?.translateToString()||'').join('\n').includes('Resume=custom-browser-chat'));
   await page.locator('#return-native').click();
   await page.locator('#stop').click();

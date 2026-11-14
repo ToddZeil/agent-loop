@@ -123,12 +123,13 @@ def agent_terminal_command(run, config=None):
     state = run.state()
     session = latest_session(run, provider, config)
     model = state.get('model') if provider == state['provider'] else None
+    full_access = run.config.get('full_access', True)
     effort = run.config.get('worker_effort') or 'medium'
     instructions = ('Work in this managed worktree. You may edit all project files. '
                     'Do not commit, push, or change branches; the supervisor manages Git.\n' + run._prompt(state))
     if provider == 'codex':
-        options = ['--no-daemon', '--no-alt-screen', '--cd', str(run.worktree), '--sandbox', 'workspace-write',
-                   '--ask-for-approval', 'on-request', '-c', 'developer_instructions=' + json.dumps(instructions),
+        options = ['--no-daemon', '--no-alt-screen', '--cd', str(run.worktree), '--sandbox', 'danger-full-access' if full_access else 'workspace-write',
+                   '--ask-for-approval', 'never' if full_access else 'on-request', '-c', 'developer_instructions=' + json.dumps(instructions),
                    '-c', 'model_reasoning_effort=' + json.dumps(effort)]
         if model:
             options += ['--model', model]
@@ -143,12 +144,16 @@ def agent_terminal_command(run, config=None):
         session = session or str(uuid.uuid4())
         argv = ['claude', '--session-id' if fresh else '--resume', session,
                 '--append-system-prompt', instructions, '--effort', effort]
+        if full_access:
+            argv += ['--dangerously-skip-permissions']
         if model:
             argv += ['--model', model]
         if not run.config.get('allow_subagents'):
             argv += ['--disallowedTools', 'Agent']
     elif provider == 'antigravity':
         argv = ['agy', '--add-dir', str(run.worktree)]
+        if full_access:
+            argv += ['--dangerously-skip-permissions']
         if model:
             argv += ['--model', model]
         if str(model or '').rsplit('-', 1)[-1] not in ('low', 'medium', 'high'):
@@ -156,7 +161,9 @@ def agent_terminal_command(run, config=None):
         if session:
             argv += ['--conversation', session]
     elif provider == 'muse':
-        argv = ['muse', '--workspace', str(run.worktree), '--approval-mode', 'on-request', '--reasoning-effort', effort]
+        argv = ['muse', '--workspace', str(run.worktree), '--approval-mode', 'never' if full_access else 'on-request', '--reasoning-effort', effort]
+        if full_access:
+            argv += ['--disable-sandbox', '--disable-approval', '--trust-workspace']
         if model:
             argv += ['--model', model]
         if session:

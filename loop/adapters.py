@@ -214,7 +214,7 @@ def run_process(argv, cwd, timeout=180, stdin=None, idle_timeout=None, activity=
 
 
 def command(provider, prompt, model=None, effort=None, worker=True, sandbox=False,
-            workspace=None, scope="files", allow_subagents=False):
+            workspace=None, scope="files", allow_subagents=False, full_access=False):
     effort = effort or (model.rsplit("-", 1)[-1]
                         if provider == "antigravity" and model
                         and model.rsplit("-", 1)[-1] in ("low", "medium", "high")
@@ -244,9 +244,9 @@ def command(provider, prompt, model=None, effort=None, worker=True, sandbox=Fals
         argv = ["codex", "exec", "--ignore-user-config", "--ephemeral", "--json",
                 "--enable" if allow_subagents else "--disable", "multi_agent",
                 "--enable" if allow_subagents else "--disable", "multi_agent_v2",
-                "-s", "workspace-write", "-c", 'approval_policy="never"',
+                "-s", "danger-full-access" if worker and full_access else "workspace-write", "-c", 'approval_policy="never"',
                 "-c", 'model_reasoning_effort="' + effort + '"']
-        if worker and scope == "worktree":
+        if worker and scope == "worktree" and not full_access:
             # Dependency installs and browser downloads need the network.
             argv += ["-c", "sandbox_workspace_write.network_access=true"]
         if model:
@@ -257,7 +257,7 @@ def command(provider, prompt, model=None, effort=None, worker=True, sandbox=Fals
         # the work. Delegation follows the task setting.
         argv = ["claude", "-p", prompt, "--output-format", "json", "--tools", "default",
                 "--no-session-persistence",
-                "--permission-mode", "bypassPermissions", "--effort", effort]
+                "--permission-mode", "bypassPermissions" if full_access else "acceptEdits", "--permission-prompts", "none", "--effort", effort]
         if not allow_subagents:
             argv += ["--disallowed-tools", "Agent"]
     elif provider == "claude":
@@ -266,13 +266,14 @@ def command(provider, prompt, model=None, effort=None, worker=True, sandbox=Fals
                 "--restricted", "--permission-mode", "acceptEdits",
                 "--permission-prompts", "none", "--effort", effort]
     elif provider == "muse":
-        # Unattended: a headless run can never answer an approval prompt, so
-        # approval is off and containment is the OS sandbox (on by default)
-        # plus the managed worktree and the supervisor's checks.
+        # Headless runs cannot answer approval prompts. Full access also turns
+        # off the OS sandbox; restricted workers retain the CLI's sandbox.
         # --workspace roots the agent's file tools at the worktree; without
         # it muse edits relative to its own project directory instead.
         argv = ["muse", "exec", "--json", "--approval-mode", "never",
                 "--reasoning-effort", effort]
+        if worker and full_access:
+            argv += ["--disable-sandbox", "--disable-approval", "--trust-workspace"]
         if workspace:
             argv += ["--workspace", str(workspace)]
         argv.append(prompt)
@@ -291,7 +292,7 @@ def command(provider, prompt, model=None, effort=None, worker=True, sandbox=Fals
             # the managed worktree is never touched and every task fails on a
             # missing file. Binding the workspace is what makes it edit in place.
             argv += ["--add-dir", str(workspace)]
-        if sandbox:
+        if sandbox or (worker and scope == "worktree" and not full_access):
             # Terminal restrictions. Measured behaviour: with --sandbox the CLI
             # denies every run_command in headless mode, including the `pwd` the
             # model issues to orient itself, and the worker then produces
@@ -300,12 +301,9 @@ def command(provider, prompt, model=None, effort=None, worker=True, sandbox=Fals
             # together) and a worker under it will usually fail.
             argv.append("--sandbox")
         elif worker:
-            # Parity with the other two adapters, which already run unattended:
-            # codex uses approval_policy="never" and claude --permission-prompts
-            # none. Headless agy cannot answer a permission prompt, so without
-            # this any command it attempts is auto-denied and the task fails.
-            # Containment is the managed worktree plus the supervisor's
-            # allowlist, history and truncation checks, not this flag.
+            # Headless agy cannot answer a permission prompt. Full-access
+            # workers approve tools directly; restricted worktree workers use
+            # the sandbox branch above.
             argv.append("--dangerously-skip-permissions")
     else:
         raise ValueError("Unknown provider: " + provider)
@@ -319,21 +317,21 @@ def command(provider, prompt, model=None, effort=None, worker=True, sandbox=Fals
 
 
 def continuing_worker_command(provider, prompt, model=None, effort=None,
-                              session=None, workspace=None, allow_subagents=False):
+                              session=None, workspace=None, allow_subagents=False, full_access=False):
     """A worktree-scoped worker turn with provider conversation persistence.
 
     These resume flags are supported by the installed CLI versions. A failed
     resume is classified by the keeper and retried as a fresh handoff.
     """
     argv = command(provider, prompt, model, effort, scope="worktree", workspace=workspace,
-                   allow_subagents=allow_subagents)
+                   allow_subagents=allow_subagents, full_access=full_access)
     if provider == "codex":
         argv.remove("--ephemeral")
         if session:
             position = argv.index("-s")
             del argv[position:position + 2]
             argv.insert(2, "resume")
-            argv[-1:-1] = ["-c", 'sandbox_mode="workspace-write"']
+            argv[-1:-1] = ["-c", 'sandbox_mode=' + json.dumps('danger-full-access' if full_access else 'workspace-write')]
             argv.insert(-1, session)
     elif provider == "claude":
         argv.remove("--no-session-persistence")

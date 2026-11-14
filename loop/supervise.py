@@ -558,6 +558,8 @@ class Fleet:
                 raise ValueError('Unsupported worker effort')
             if 'allow_subagents' in options and type(options['allow_subagents']) is not bool:
                 raise ValueError('allow_subagents must be a boolean')
+            if 'full_access' in options and type(options['full_access']) is not bool:
+                raise ValueError('full_access must be a boolean')
             providers = options.get('workers', ['codex'])
             if (not isinstance(providers, list) or not providers
                     or any(p not in PROVIDERS for p in providers)

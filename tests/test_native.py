@@ -33,7 +33,8 @@ class NativeTerminalTests(unittest.TestCase):
         self.assertNotIn('--json', argv)
         self.assertIn('--no-daemon', argv)
         self.assertEqual(argv[argv.index('--cd')+1], str(self.workspace))
-        self.assertEqual(argv[argv.index('--sandbox')+1], 'workspace-write')
+        self.assertEqual(argv[argv.index('--sandbox')+1], 'danger-full-access')
+        self.assertEqual(argv[argv.index('--ask-for-approval')+1], 'never')
         self.assertIn('model_reasoning_effort="high"', argv)
 
     def test_fresh_chat_and_provider_validation(self):
@@ -103,3 +104,38 @@ class NativeTerminalTests(unittest.TestCase):
         self.assertIsNone(agent_terminal_command(self.run,other)[1])
         with self.assertRaises(ValueError):
             terminal_config(self.run,{'program':'custom','command':'agent','resume_command':'agent --last'})
+
+    def test_full_access_and_opt_out_cover_all_native_adapters(self):
+        for full in (True,False):
+            self.run.config['full_access']=full
+            for provider in ('codex','claude','antigravity','muse'):
+                with self.subTest(provider=provider,full=full):
+                    self.state.update(provider=provider,session_id='exact-chat')
+                    argv,_,_=agent_terminal_command(self.run)
+                    if provider == 'codex':
+                        self.assertEqual(argv[argv.index('--sandbox')+1], 'danger-full-access' if full else 'workspace-write')
+                        self.assertEqual(argv[argv.index('--ask-for-approval')+1], 'never' if full else 'on-request')
+                    elif provider == 'muse':
+                        self.assertEqual('--disable-sandbox' in argv,full)
+                        self.assertEqual(argv[argv.index('--approval-mode')+1], 'never' if full else 'on-request')
+                    else:
+                        self.assertEqual('--dangerously-skip-permissions' in argv,full)
+
+    def test_full_access_continuous_fresh_and_resumed_worker_flags(self):
+        from loop.adapters import continuing_worker_command
+        for full in (True,False):
+            for session in (None,'exact-chat'):
+                for provider in ('codex','claude','antigravity','muse'):
+                    with self.subTest(provider=provider,session=session,full=full):
+                        argv=continuing_worker_command(provider,'objective',session=session,workspace=str(self.workspace),full_access=full)
+                        if provider == 'codex':
+                            mode='danger-full-access' if full else 'workspace-write'
+                            self.assertIn(mode if not session else 'sandbox_mode="'+mode+'"',argv)
+                            self.assertIn('approval_policy="never"',argv)
+                        elif provider == 'claude':
+                            self.assertEqual(argv[argv.index('--permission-mode')+1], 'bypassPermissions' if full else 'acceptEdits')
+                        elif provider == 'muse':
+                            self.assertEqual('--disable-sandbox' in argv,full)
+                        else:
+                            self.assertEqual('--dangerously-skip-permissions' in argv,full)
+                            self.assertEqual('--sandbox' in argv,not full)
