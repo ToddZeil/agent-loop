@@ -155,9 +155,7 @@ function render() {
   });
   const openAgentMenu = $('workers').querySelector('details[open]')?.dataset.agentMenu;
   $('workers').innerHTML = visibleTasks.map(t => {
-    const hold = Object.values(t.provider_holds || {}).filter(h => h.until > Date.now()/1000).sort((a,b) => a.until-b.until)[0];
-    const wait = t.state === 'waiting' ? `<div class="worker-wait">${escapeHTML(t.wait_reason?.slice(0,180))}${hold ? ` · reset in <span data-until="${hold.until}">${countdown(hold.until)}</span>` : t.retry_at ? ` · retry in <span data-until="${t.retry_at}">${countdown(t.retry_at)}</span>` : ''}</div>` : '';
-    return `<article class="worker-card ${t.id === selectedTask ? 'selected' : ''}" data-task="${escapeHTML(t.id)}"><button class="worker-select" aria-label="Open agent ${escapeHTML(agentName(t))}"><div class="worker-top"><strong>${escapeHTML(agentName(t))}</strong>${pill(t.signal || t.state)}</div><span class="repo" title="${escapeHTML(t.repo)}">${escapeHTML(t.repo.split(/[\\/]/).filter(Boolean).pop())}</span><div class="goal">${escapeHTML(t.goal || t.next_action)}</div>${wait}<div class="worker-bottom"><span class="model">${escapeHTML(t.provider)} / ${escapeHTML(t.model || 'default')}</span><span>${t.turns} turns · ${tokenNumber(t.usage ? t.usage.agent.total_tokens : Object.values(t.tokens || {}).reduce((a,b) => a+b,0))} tokens</span></div>${t.delete_requested ? `<p class="cleanup-status">${escapeHTML(t.delete_error ? 'Cleanup failed: '+t.delete_error : 'Deletion queued · waiting for this agent’s current turn to finish.')}</p>` : ''}</button><details class="agent-card-menu" data-agent-menu="${escapeHTML(t.id)}" ${openAgentMenu === t.id ? 'open' : ''}><summary aria-label="Options for ${escapeHTML(agentName(t))}">⋯</summary><div class="agent-card-actions"><button data-archive="${escapeHTML(t.id)}" ${t.delete_requested || t.terminal_requested ? 'disabled' : ''}>Archive agent</button><button class="danger" data-delete="${escapeHTML(t.id)}" ${t.delete_requested && !t.delete_error ? 'disabled' : ''}>${t.delete_error ? 'Retry cleanup' : 'Delete &amp; clean up'}</button></div></details></article>`;
+    return `<article class="worker-card ${t.id === selectedTask ? 'selected' : ''}" data-task="${escapeHTML(t.id)}"><button class="worker-select" aria-label="Open agent ${escapeHTML(agentName(t))}"><div class="worker-top"><strong>${escapeHTML(agentName(t))}</strong>${pill(t.signal || t.state)}</div><span class="repo" title="${escapeHTML(t.repo)}">${escapeHTML(t.repo.split(/[\\/]/).filter(Boolean).pop())}</span><div class="goal">${escapeHTML(t.delete_requested ? (t.delete_error ? 'Cleanup failed: '+t.delete_error : 'Deletion queued') : t.state === 'waiting' && t.wait_reason ? t.wait_reason : t.goal || t.next_action)}</div></button><details class="agent-card-menu" data-agent-menu="${escapeHTML(t.id)}" ${openAgentMenu === t.id ? 'open' : ''}><summary aria-label="Options for ${escapeHTML(agentName(t))}">⋯</summary><div class="agent-card-actions"><button data-archive="${escapeHTML(t.id)}" ${t.delete_requested || t.terminal_requested ? 'disabled' : ''}>Archive agent</button><button class="danger" data-delete="${escapeHTML(t.id)}" ${t.delete_requested && !t.delete_error ? 'disabled' : ''}>${t.delete_error ? 'Retry cleanup' : 'Delete &amp; clean up'}</button></div></details></article>`;
   }).join('') || '<p class="list-empty">No matching agents.</p>';
   $('workers').querySelectorAll('[data-task]').forEach(card => {
     card.querySelector('.worker-select').onclick = () => chooseTask(card.dataset.task);
@@ -744,3 +742,13 @@ themeToggle.addEventListener('click', () => {
   updateThemeToggle();
 });
 updateThemeToggle();
+
+// Dismiss workspace settings after choosing an action or clicking elsewhere.
+document.addEventListener('click', event => {
+  const menu = document.querySelector('.settings-menu');
+  if (menu.open && (!menu.contains(event.target) || event.target.closest('.settings-dropdown button'))) menu.open = false;
+});
+document.addEventListener('keydown', event => {
+  const menu = document.querySelector('.settings-menu');
+  if (event.key === 'Escape' && menu.open) { menu.open = false; menu.querySelector('summary').focus(); }
+});

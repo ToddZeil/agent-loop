@@ -1,3 +1,4 @@
+async function workspaceSettings(page) { if(await page.locator('.settings-menu').getAttribute('open') === null) await page.locator('.settings-menu > summary').click(); }
 const {test,expect} = require('@playwright/test');
 const path = require('node:path');
 async function optionalSettings(page) { if(await page.locator('#optional-settings').getAttribute('open') === null) await page.locator('#optional-settings > summary').click(); }
@@ -85,6 +86,7 @@ test('add another agent to the running supervisor through advanced manifest; mob
 test('scan repositories, choose one, persist subagent toggle, and remove/restore an agent',async ({page,request}) => {
   const fixture=await (await request.get('/test-fixture')).json();
   await page.goto('/');
+  await workspaceSettings(page);
   await page.locator('#projects').click();
   await page.getByLabel('Projects folder',{exact:true}).fill(fixture.projectsFolder);
   await page.getByRole('button',{name:'Scan & add repositories',exact:true}).click();
@@ -117,10 +119,12 @@ test('scan repositories, choose one, persist subagent toggle, and remove/restore
   await page.locator('#full-access').check();
   await expect(page.locator('#toast')).toContainText('Permissions saved');
   await page.locator('#remove-agent').click();
+  await workspaceSettings(page);
   await expect(page.locator('[data-restore="selected-repo"]')).toBeVisible({timeout:15000});
   await expect(page.locator('[data-task="selected-repo"]')).toHaveCount(0);
   await page.locator('[data-restore="selected-repo"]').click();
   await expect(page.locator('[data-task="selected-repo"]')).toBeVisible();
+  await workspaceSettings(page);
   await page.locator('#projects').click();
   await expect(page.locator('#saved-projects')).toContainText('another-project');
   await page.screenshot({path:path.resolve(__dirname,'../../.agent-loop/web-projects.png'),fullPage:true});
@@ -143,6 +147,7 @@ test('delete and clean up current and archived agents, with cancellation', async
   await page.locator('#delete-agent').click();
   await expect(page.locator('[data-task="delete-ui"]')).toBeVisible();
   await page.locator('#remove-agent').click();
+  await workspaceSettings(page);
   await expect(page.locator('[data-delete="delete-ui"]')).toBeVisible();
   page.once('dialog', async dialog => {
     expect(dialog.message()).toContain('cannot be undone');
@@ -184,6 +189,7 @@ test('tile options delete a working agent while the supervisor and other agents 
   await expect(page.locator('#task-status')).toHaveText('working', {timeout:15000});
   await page.locator('[data-task="menu-keep"]').click();
   const card = page.locator('[data-task="menu-delete"]');
+  expect((await card.boundingBox()).height).toBe(100);
   await card.locator('summary').click();
   await expect(page.locator('#task-title')).toHaveText('menu-keep');
   await expect(card.getByRole('button', {name:'Delete & clean up',exact:true})).toBeEnabled();
@@ -202,6 +208,7 @@ test('tile options delete a working agent while the supervisor and other agents 
   expect(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth)).toBe(false);
   // Exercise Archive from the same tile menu, preserving its worktree for restore.
   await page.locator('[data-task="menu-keep"] [data-archive]').click();
+  await workspaceSettings(page);
   await expect(page.locator('[data-restore="menu-keep"]')).toBeVisible({timeout:10000});
   await page.locator('[data-restore="menu-keep"]').click();
   await expect(page.locator('[data-task="menu-keep"]')).toBeVisible();
@@ -211,12 +218,14 @@ test('tile options delete a working agent while the supervisor and other agents 
 
 test('local keeper is optional and can be enabled or disabled without replacing the supervisor',async ({page}) => {
   await page.goto('/');
+  await workspaceSettings(page);
   await page.locator('#supervisor-settings').click();
   await expect(page.getByLabel('Enable optional local keeper')).not.toBeChecked();
   await page.getByLabel('Enable optional local keeper').check();
   await page.getByLabel('Local keeper model',{exact:true}).fill('installed-local-model');
   await page.getByRole('button',{name:'Save settings',exact:true}).click();
   await expect(page.locator('#keeper-status')).toContainText('installed-local-model');
+  await workspaceSettings(page);
   await page.locator('#supervisor-settings').click();
   await page.getByLabel('Enable optional local keeper').uncheck();
   await page.getByRole('button',{name:'Save settings',exact:true}).click();
@@ -305,6 +314,7 @@ test('cached exact model IDs are selectable for workers and supervisor; existing
   await picker.first().selectOption('fixture-model');
   await expect(page.locator('#task-fields [data-field=model]')).toHaveValue('fixture-model');
   await page.locator('#create-dialog [data-close]').click();
+  await workspaceSettings(page);
   await page.locator('#supervisor-settings').click();
   await expect(page.locator('#supervisor-dialog [data-model-picker] option[value="fixture-model"]')).toBeAttached();
   await page.locator('#supervisor-dialog [data-close]').click();
@@ -313,7 +323,8 @@ test('cached exact model IDs are selectable for workers and supervisor; existing
   await expect(page.locator('#save-agent-model')).toBeEnabled();
   await page.locator('.agent-model-settings [data-model-picker]').selectOption('fixture-model');
   await page.locator('#save-agent-model').click();
-  await expect(page.locator('.worker-card.selected .model')).toContainText('fixture-model');
+  await expect(page.locator('#toast')).toContainText('Model saved');
+  await expect(page.locator('.agent-model-settings [data-model-picker]')).toHaveValue('fixture-model');
   await page.locator('.agent-model-settings [data-model-picker]').selectOption('__custom');
   await page.locator('.agent-model-settings input[aria-label="Custom model ID"]').fill('saved-custom-model');
   await page.locator('#save-agent-model').click();
@@ -375,6 +386,7 @@ test('effort is selectable for new and existing agents and supervisor; parallel 
   await page.locator('#save-agent-effort').click();
   const agentId=await page.locator('#task-title').textContent();
   await expect.poll(async()=> (await (await page.request.get('/api/supervisor')).json()).supervisor.tasks.find(t=>t.id===agentId)?.worker_effort).toBe('low');
+  await workspaceSettings(page);
   await page.locator('#supervisor-settings').click();
   await page.getByLabel('Supervisor effort',{exact:true}).selectOption('high');
   await page.getByLabel('Unlimited parallel workers',{exact:true}).check();
@@ -383,6 +395,7 @@ test('effort is selectable for new and existing agents and supervisor; parallel 
   const settings=(await (await page.request.get('/api/supervisor')).json()).supervisor;
   expect(settings.max_parallel).toBeNull();
   expect(settings.supervisor.effort).toBe('high');
+  await workspaceSettings(page);
   await page.locator('#supervisor-settings').click();
   await expect(page.getByLabel('Unlimited parallel workers',{exact:true})).toBeChecked();
   await page.locator('#supervisor-dialog [data-close]').click();
@@ -480,6 +493,7 @@ test('desktop opens directly to a readable conversation with its composer in vie
   for (const width of [1440, 390, 320]) {
     await page.setViewportSize({width,height:width === 1440 ? 1000 : 844});
     for (const [trigger, dialog] of [['new-fleet','create-dialog'], ['supervisor-settings','supervisor-dialog'], ['projects','projects-dialog']]) {
+      if (trigger !== 'new-fleet') await workspaceSettings(page);
       await page.locator('#'+trigger).click();
       const modal = page.locator('#'+dialog);
       await expect(modal).toBeVisible();
@@ -732,9 +746,11 @@ test('merge and redeploy submits the selected worktree and exposes job progress'
 test('theme switch persists and remains available on mobile', async ({page}) => {
   await page.goto('/');
   const toggle = page.locator('#theme-toggle');
+  await workspaceSettings(page);
   await expect(toggle).toHaveAccessibleName('Switch to light mode');
   await toggle.click();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  await workspaceSettings(page);
   await expect(toggle).toHaveAccessibleName('Switch to dark mode');
   await page.reload();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
@@ -742,6 +758,7 @@ test('theme switch persists and remains available on mobile', async ({page}) => 
   await expect(page.locator('#create-dialog')).toBeVisible();
   await page.locator('[data-close="create-dialog"]').click();
   await page.setViewportSize({width: 390, height: 844});
+  await workspaceSettings(page);
   await expect(toggle).toBeVisible();
   await toggle.click();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');

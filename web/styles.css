@@ -314,3 +314,22 @@ dialog label { display: block; font-size: 11px; color: #a1b39e; margin-top: 16px
 [data-theme="light"] .native-toolbar .button { color: #e8eeea; background: #222b25; border-color: #52654c; }
 [data-theme="light"] .native-toolbar .button.primary { color: #fff; background: #386d2e; }
 [data-theme="light"] .native-options input, [data-theme="light"] .native-options select { color: #e8eeea; background: #111813; }
+
+/* Workspace controls live in a compact settings menu. */
+.workspace-bar { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:14px 28px; background:#141a17; border-bottom:1px solid var(--line); }
+.workspace-bar-actions { display:flex; align-items:center; gap:10px; }
+.settings-menu { position:relative; }
+.settings-menu > summary { list-style:none; cursor:pointer; }
+.settings-menu > summary::-webkit-details-marker { display:none; }
+.settings-dropdown { position:absolute; right:0; top:calc(100% + 8px); z-index:20; width:240px; padding:10px; border:1px solid var(--line); border-radius:9px; background:#1b241e; box-shadow:0 8px 24px #0008; }
+.settings-dropdown > .button { width:100%; justify-content:flex-start; }
+.settings-dropdown .sidebar-bottom { display:block; margin-top:10px; }
+main { margin-left:0; }
+.worker-card { height:100px; padding:10px 12px; }
+.worker-select { height:100%; overflow:hidden; }
+.worker-top strong { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.worker-card .repo { margin:4px 0; }
+.worker-card .goal { line-height:1.35; -webkit-line-clamp:2; }
+[data-theme="light"] .workspace-bar, [data-theme="light"] .settings-dropdown { background:#edf2eb; }
+@media(max-width:650px) { .workspace-bar { padding:12px 14px; } .workspace-bar-actions { gap:6px; } .workspace-bar-actions .button { font-size:11px; padding:9px; } .settings-dropdown .sidebar-bottom { display:block; } .worker-card { padding:10px 12px; } }
+@media(min-width:801px) { .inspector { height:calc(100dvh - 315px); } }
