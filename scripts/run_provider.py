@@ -58,7 +58,7 @@ def provider_wait(deadline, reason, invoked):
 def main():
     parser = argparse.ArgumentParser(description="Wait for a provider reset, then run one agent command")
     parser.add_argument("--repo", required=True)
-    parser.add_argument("--provider", choices=("codex", "claude", "antigravity"), required=True)
+    parser.add_argument("--provider", choices=("codex", "claude", "antigravity", "muse"), required=True)
     parser.add_argument("--timeout", type=int, default=180)
     parser.add_argument("--idle-timeout", type=int, default=None)
     parser.add_argument("--watch", action="append", default=[],

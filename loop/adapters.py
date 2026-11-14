@@ -1,4 +1,5 @@
 """Official CLI adapters. No credential extraction or private quota endpoints."""
+import fcntl
 import json
 import os
 import re
@@ -45,6 +46,39 @@ def _stop_group(proc):
         proc.wait()
 
 
+def _signal_group(pgid, sig):
+    """Best-effort killpg: the group may already be empty or reassigned by
+    the time we signal it (e.g. its leader already exited), which raises
+    ProcessLookupError/PermissionError rather than meaning anything is wrong
+    here — the process we wanted gone is already gone or unreachable either
+    way, so this must never crash the caller.
+    """
+    try:
+        os.killpg(pgid, sig)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def _drain_nonblocking(stream):
+    """Best-effort read of whatever is already buffered on ``stream``.
+
+    Used only after a killed process's pipe has failed to hit EOF within a
+    grace period, which means some other process still holds the write end
+    open. A blocking read/communicate() would hang indefinitely in that case,
+    so this switches the fd to non-blocking and takes what is available
+    instead of waiting for a close that may never come.
+    """
+    if stream is None:
+        return ""
+    try:
+        fd = stream.fileno()
+        flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+        fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+        return stream.read() or ""
+    except (OSError, ValueError):
+        return ""
+
+
 def run_process(argv, cwd, timeout=180, stdin=None, idle_timeout=None, activity=None,
                 tee=None, pass_fds=(), on_spawn=None):
     """Bound the whole process group; never interpolate prompts into a shell.
@@ -66,12 +100,22 @@ def run_process(argv, cwd, timeout=180, stdin=None, idle_timeout=None, activity=
             out, err = proc.communicate(stdin, timeout=timeout)
             return proc.returncode, out, err
         except (subprocess.TimeoutExpired, KeyboardInterrupt) as exc:
-            os.killpg(proc.pid, signal.SIGTERM)
+            _signal_group(proc.pid, signal.SIGTERM)
             try:
                 out, err = proc.communicate(timeout=3)
             except subprocess.TimeoutExpired:
-                os.killpg(proc.pid, signal.SIGKILL)
-                out, err = proc.communicate()
+                _signal_group(proc.pid, signal.SIGKILL)
+                try:
+                    out, err = proc.communicate(timeout=5)
+                except subprocess.TimeoutExpired:
+                    # A detached grandchild (e.g. Flutter's persistent
+                    # frontend_server compiler daemon) can outlive the killed
+                    # process group and keep holding the stdout/stderr pipes
+                    # open, so communicate() would otherwise block forever
+                    # waiting for an EOF that will never come. Take whatever
+                    # is already buffered instead of hanging the supervisor.
+                    out = _drain_nonblocking(proc.stdout)
+                    err = _drain_nonblocking(proc.stderr)
             if isinstance(exc, KeyboardInterrupt):
                 raise
             return 124, out, err + "\nworker timeout"
@@ -170,23 +214,26 @@ def run_process(argv, cwd, timeout=180, stdin=None, idle_timeout=None, activity=
 
 
 def command(provider, prompt, model=None, effort=None, worker=True, sandbox=False,
-            workspace=None, scope="files"):
+            workspace=None, scope="files", allow_subagents=False):
     effort = effort or (model.rsplit("-", 1)[-1]
                         if provider == "antigravity" and model
                         and model.rsplit("-", 1)[-1] in ("low", "medium", "high")
                         else "low")
+    allow_subagents = bool(allow_subagents and worker)
+    delegation = ("You may delegate to native subagents when useful. Keep their work in this "
+                  "task's worktree and coordinate their edits. " if allow_subagents else
+                  "Do not delegate, spawn, or call any subagent, teammate, agent, or secondary "
+                  "model. Complete this task in the current session. ")
     if worker and scope == "worktree":
-        prompt += ("\n\nExecution constraint: do not delegate, spawn, or call any subagent, "
-                   "teammate, agent, or secondary model. Complete this task in the "
-                   "current session. You may read and edit any file in this worktree and "
+        prompt += ("\n\nExecution constraint: " + delegation +
+                   "You may read and edit any file in this worktree and "
                    "run builds, tests, generators and dependency installs (for example "
                    "`npx playwright install`) as needed. Do not commit or change branches. "
                    "Finish with a concise summary of what you changed and anything that "
                    "still blocks the task.")
     elif worker:
-        prompt += ("\n\nExecution constraint: do not delegate, spawn, or call any subagent, "
-                   "teammate, agent, or secondary model. Complete this task in the "
-                   "current session. Use your repository tools to inspect and edit the "
+        prompt += ("\n\nExecution constraint: " + delegation +
+                   "Use your repository tools to inspect and edit the "
                    "managed worktree directly. Do not commit, change branches, or edit "
                    "outside the allowed files. Finish with a concise summary.")
     else:
@@ -195,7 +242,8 @@ def command(provider, prompt, model=None, effort=None, worker=True, sandbox=Fals
                    "change branches. Return only the requested response.")
     if provider == "codex":
         argv = ["codex", "exec", "--ignore-user-config", "--ephemeral", "--json",
-                "--disable", "multi_agent", "--disable", "multi_agent_v2",
+                "--enable" if allow_subagents else "--disable", "multi_agent",
+                "--enable" if allow_subagents else "--disable", "multi_agent_v2",
                 "-s", "workspace-write", "-c", 'approval_policy="never"',
                 "-c", 'model_reasoning_effort="' + effort + '"']
         if worker and scope == "worktree":
@@ -206,15 +254,28 @@ def command(provider, prompt, model=None, effort=None, worker=True, sandbox=Fals
         argv.append(prompt)
     elif provider == "claude" and worker and scope == "worktree":
         # Full tools, including Bash: builds, generators and installs are part of
-        # the work. Only delegation stays disabled.
+        # the work. Delegation follows the task setting.
         argv = ["claude", "-p", prompt, "--output-format", "json", "--tools", "default",
-                "--disallowed-tools", "Agent", "--no-session-persistence",
+                "--no-session-persistence",
                 "--permission-mode", "bypassPermissions", "--effort", effort]
+        if not allow_subagents:
+            argv += ["--disallowed-tools", "Agent"]
     elif provider == "claude":
         argv = ["claude", "-p", prompt, "--output-format", "json", "--tools", "default",
                 "--disallowed-tools", "Agent", "--safe-mode", "--no-session-persistence",
                 "--restricted", "--permission-mode", "acceptEdits",
                 "--permission-prompts", "none", "--effort", effort]
+    elif provider == "muse":
+        # Unattended: a headless run can never answer an approval prompt, so
+        # approval is off and containment is the OS sandbox (on by default)
+        # plus the managed worktree and the supervisor's checks.
+        # --workspace roots the agent's file tools at the worktree; without
+        # it muse edits relative to its own project directory instead.
+        argv = ["muse", "exec", "--json", "--approval-mode", "never",
+                "--reasoning-effort", effort]
+        if workspace:
+            argv += ["--workspace", str(workspace)]
+        argv.append(prompt)
     elif provider == "antigravity":
         # agy rejects --effort beside a model id that already encodes the tier.
         tiered = str(model or "").rsplit("-", 1)[-1] in ("low", "medium", "high")
@@ -258,13 +319,14 @@ def command(provider, prompt, model=None, effort=None, worker=True, sandbox=Fals
 
 
 def continuing_worker_command(provider, prompt, model=None, effort=None,
-                              session=None, workspace=None):
+                              session=None, workspace=None, allow_subagents=False):
     """A worktree-scoped worker turn with provider conversation persistence.
 
     These resume flags are supported by the installed CLI versions. A failed
     resume is classified by the keeper and retried as a fresh handoff.
     """
-    argv = command(provider, prompt, model, effort, scope="worktree", workspace=workspace)
+    argv = command(provider, prompt, model, effort, scope="worktree", workspace=workspace,
+                   allow_subagents=allow_subagents)
     if provider == "codex":
         argv.remove("--ephemeral")
         if session:
@@ -279,6 +341,9 @@ def continuing_worker_command(provider, prompt, model=None, effort=None,
             argv += ["--resume", session]
     elif provider == "antigravity" and session:
         argv += ["--conversation", session]
+    elif provider == "muse" and session:
+        # The prompt is argv[-1]; flags go before it, not after.
+        argv[-1:-1] = ["--session-id", session]
     return argv
 
 
@@ -343,6 +408,22 @@ def supervisor_command(provider, prompt, model=None, effort=None, session_id=Non
             argv += ["--model", model]
         if session_id:
             argv += ["--conversation", session_id]
+    elif provider == "muse":
+        # Read-only by flags: file reads stay available, writes and shell do
+        # not. muse has no system-prompt flag, so ROLE travels in the prompt
+        # (callers prepend it for providers outside SYSTEM_INSTRUCTIONS).
+        if instructions:
+            prompt = instructions + "\n\n" + prompt
+        argv = ["muse", "exec", "--json", "--approval-mode", "never",
+                "--disable-write", "--disable-shell",
+                "--reasoning-effort", effort]
+        if workspace:
+            argv += ["--workspace", str(workspace)]
+        if model:
+            argv += ["--model", model]
+        argv.append(prompt)
+        if session_id:
+            argv[-1:-1] = ["--session-id", session_id]
     else:
         raise ValueError("Unknown provider: " + provider)
     return argv
@@ -353,6 +434,18 @@ SESSION_KEYS = {"codex": "thread_id", "claude": "session_id", "antigravity": "co
 
 def session_id(provider, out):
     """The provider's resumable conversation id from its JSON output, or None."""
+    if provider == "muse":
+        # MSP envelopes carry the session on stream.id, not in a payload key.
+        for line in out.splitlines():
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            stream = event.get("stream") if isinstance(event, dict) else None
+            if (isinstance(stream, dict) and stream.get("kind") == "session"
+                    and isinstance(stream.get("id"), str)):
+                return stream["id"]
+        return None
     key = SESSION_KEYS.get(provider)
     found = None
     for line in out.splitlines():
@@ -627,10 +720,22 @@ def antigravity_limits(cwd, timeout=30):
     return {"rate_limits": {"models": windows}, "source": "antigravity-usage", "raw": data}
 
 
+def muse_limits(cwd, timeout=30):
+    """Muse exposes no headless quota command, so there is no telemetry.
+
+    Raise (rather than return zeros) so `usage` reports unknown and the
+    provider boundary lets the CLI speak for itself instead of inventing
+    headroom.
+    """
+    raise FileNotFoundError("Muse has no headless quota command")
+
+
 AUTH_PROBES = {
     "codex": ["codex", "login", "status"],
     "claude": ["claude", "auth", "status"],
     "antigravity": ["agy", "auth", "status"],
+    # No muse entry: it has no non-interactive auth-status subcommand, and an
+    # unavailable probe reports unknown rather than guessing either answer.
 }
 
 
@@ -667,6 +772,8 @@ def provider_limits(provider, cwd, timeout=30):
         return claude_limits(cwd, timeout)
     if provider == "antigravity":
         return antigravity_limits(cwd, timeout)
+    if provider == "muse":
+        return muse_limits(cwd, timeout)
     raise ValueError("Unknown provider: " + provider)
 
 
@@ -717,6 +824,32 @@ def parse(provider, code, out, err, now=None):
                 usage, success = event.get("usage", {}), True
             if event.get("type") in ("error", "turn.failed"):
                 errors.append(str(event.get("error", event.get("message", event))))
+        elif provider == "muse":
+            # MSP wire envelopes: streamed text in run.output.delta, the full
+            # reply in run.terminal.completed. Usage key names are not
+            # documented, so usage is best-effort and may stay empty.
+            payload = event.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            ptype = event.get("payload_type", "")
+            if ptype == "run.output.delta":
+                text = payload.get("text")
+                if isinstance(text, str):
+                    response += text
+            elif ptype == "run.terminal.completed" and payload.get("terminal") == "completed":
+                text = payload.get("text")
+                if isinstance(text, str) and text:
+                    response = text
+                if payload.get("reason") is None:
+                    success = True
+                else:
+                    errors.append(str(payload["reason"]))
+            elif ptype.startswith("run.terminal."):
+                errors.append(str(payload.get("reason") or payload.get("text") or ptype))
+            use = payload.get("usage")
+            if isinstance(use, dict) and any(isinstance(use.get(key), int) for key in (
+                    "input_tokens", "output_tokens", "total_tokens")):
+                usage = use
         else:
             response = event.get("result", event.get("response", response))
             usage = event.get("usage", usage)
@@ -758,7 +891,10 @@ def parse(provider, code, out, err, now=None):
         return Result("ok", response, usage, deadline, estimated_usd=cost)
     message = "\n".join(errors + [err, response])[-4000:]
     lower = message.lower()
-    if any(x in lower for x in ("not logged in", "authentication required", "authentication_failed", "please run /login")):
+    if any(x in lower for x in ("model_not_found", "invalid model", "unknown model", "unsupported model")) or (
+            "model" in lower and any(x in lower for x in ("not supported", "does not exist", "do not have access"))):
+        status = "configuration_error"
+    elif any(x in lower for x in ("not logged in", "authentication required", "authentication_failed", "please run /login")):
         status = "auth_required"
     elif deadline or any(x in lower for x in ("rate_limit", "rate limit", "quota exhausted", "usage limit", "session limit", "weekly limit", "resource_exhausted")):
         status = "rate_limited"

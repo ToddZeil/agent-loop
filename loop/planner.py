@@ -96,7 +96,7 @@ def live_provider_usage(repo, timeout=30):
     not an artificial all-or-nothing failure before any useful work can start.
     """
     usage = {}
-    for provider in ("codex", "claude", "antigravity"):
+    for provider in ("codex", "claude", "antigravity", "muse"):
         try:
             limits = provider_limits(provider, repo, timeout)
             usage[provider] = {"status": "ok", "limits": limits.get(

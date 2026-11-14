@@ -7,9 +7,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from loop.adapters import (Result, antigravity_limits, claude_limits, command,
-                           parse, provider_limits, quota_deadline, run_process, runner_command,
-                           token_total)
+from loop.adapters import (Result, antigravity_limits, auth_probe, claude_limits, command,
+                           continuing_worker_command, muse_limits, parse, provider_limits,
+                           quota_deadline, run_process, runner_command, session_id,
+                           supervisor_command, token_total)
 from loop.engine import Engine, git, safe_path, validate_plan
 from loop.planner import create_plan, validate_generated_plan
 from loop.release import checks_pass, publish, validate_remote
@@ -21,6 +22,12 @@ WORKER = Path(__file__).resolve().parent / "concurrent_worker.py"
 
 
 class AdapterTests(unittest.TestCase):
+    def test_unsupported_model_is_configuration_error_not_quota(self):
+        for message in ("The 'GPT-6.1-Sol' model is not supported when using Codex with a ChatGPT account.",
+                        'model_not_found', 'Unknown model: bad-model'):
+            self.assertEqual(parse('codex',1,'',message).status,'configuration_error')
+
+
     def test_codex_usage_does_not_double_count_cache(self):
         result = parse("codex", 0, '\n'.join([
             '{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}',
@@ -104,11 +111,13 @@ class AdapterTests(unittest.TestCase):
     def test_provider_limits_dispatches_every_supported_provider(self):
         with patch("loop.adapters.codex_limits", return_value={"codex": 1}) as codex, \
                 patch("loop.adapters.claude_limits", return_value={"claude": 1}) as claude, \
-                patch("loop.adapters.antigravity_limits", return_value={"antigravity": 1}) as agy:
+                patch("loop.adapters.antigravity_limits", return_value={"antigravity": 1}) as agy, \
+                patch("loop.adapters.muse_limits", return_value={"muse": 1}) as muse:
             self.assertEqual(provider_limits("codex", "."), {"codex": 1})
             self.assertEqual(provider_limits("claude", "."), {"claude": 1})
             self.assertEqual(provider_limits("antigravity", "."), {"antigravity": 1})
-            self.assertTrue(codex.called and claude.called and agy.called)
+            self.assertEqual(provider_limits("muse", "."), {"muse": 1})
+            self.assertTrue(codex.called and claude.called and agy.called and muse.called)
 
     def test_two_pass_planner_uses_context_then_strong_planner(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -884,6 +893,123 @@ class EngineTests(unittest.TestCase):
             count = len(calls)
             self.assertEqual(publish(self.engine,"test","test/demo",merge=True)["state"], "merged")
             self.assertFalse(any(call[:2] == ("git","push") for call in calls[count:]))
+
+
+class MuseProviderTests(unittest.TestCase):
+    SID = "01a0e2c0-5861-7e20-a318-1d6695c521fb"
+
+    def envelope(self, payload_type, payload):
+        return json.dumps({"schema_version": 1, "stream": {"kind": "session", "id": self.SID},
+                           "sequence": 1, "payload_type": payload_type, "payload": payload})
+
+    def terminal(self, text="done", reason=None, terminal="completed"):
+        return self.envelope("run.terminal.completed",
+                             {"kind": "run_terminal", "terminal": terminal, "text": text,
+                              "reason": reason})
+
+    def test_worker_command_is_unattended_and_workspace_bound(self):
+        argv = command("muse", "do the thing", "muse-spark-1.3-contributor", "medium",
+                       workspace="/tmp/ws")
+        self.assertEqual(argv[:3], ["muse", "exec", "--json"])
+        self.assertEqual(argv[argv.index("--approval-mode") + 1], "never")
+        self.assertEqual(argv[argv.index("--reasoning-effort") + 1], "medium")
+        self.assertEqual(argv[argv.index("--workspace") + 1], "/tmp/ws")
+        self.assertEqual(argv[argv.index("--model") + 1], "muse-spark-1.3-contributor")
+        self.assertTrue(argv[-1].startswith("do the thing"))
+        self.assertNotIn("--disable-shell", argv)  # workers need their tools
+        bare = command("muse", "do the thing")
+        self.assertNotIn("--workspace", bare)
+        self.assertNotIn("--model", bare)
+
+    def test_resume_continues_the_same_session(self):
+        argv = continuing_worker_command("muse", "P", "m", None, "SID", "/w")
+        self.assertEqual(argv[:2], ["muse", "exec"])
+        self.assertTrue(argv[-1].startswith("P"))
+        self.assertEqual(argv[-3:-1], ["--session-id", "SID"])
+        fresh = continuing_worker_command("muse", "P", None, None, None, "/w")
+        self.assertNotIn("--session-id", fresh)
+
+    def test_supervisor_command_is_read_only_and_resumable(self):
+        argv = supervisor_command("muse", "plan", None, "medium", None, "/w")
+        self.assertIn("--disable-write", argv)
+        self.assertIn("--disable-shell", argv)
+        self.assertTrue(argv[-1].startswith("plan"))
+        resumed = supervisor_command("muse", "plan", None, "medium", "SID", "/w")
+        self.assertEqual(resumed[-3:-1], ["--session-id", "SID"])
+        role = supervisor_command("muse", "plan", instructions="ROLE")
+        self.assertTrue(role[-1].startswith("ROLE"))
+
+    def test_terminal_completed_is_ok_with_full_text(self):
+        out = "\n".join([self.envelope("run.output.delta",
+                                       {"kind": "run_output_delta", "text": "par"}),
+                         self.envelope("run.output.delta",
+                                       {"kind": "run_output_delta", "text": "tial"}),
+                         self.terminal("done")])
+        result = parse("muse", 0, out, "")
+        self.assertEqual(result.status, "ok")
+        self.assertEqual(result.response, "done")
+
+    def test_deltas_accumulate_when_terminal_carries_no_text(self):
+        out = "\n".join([self.envelope("run.output.delta",
+                                       {"kind": "run_output_delta", "text": "hel"}),
+                         self.envelope("run.output.delta",
+                                       {"kind": "run_output_delta", "text": "lo"}),
+                         self.terminal("", reason=None)])
+        result = parse("muse", 0, out, "")
+        self.assertEqual(result.status, "ok")
+        self.assertEqual(result.response, "hello")
+
+    def test_terminal_failed_is_an_error(self):
+        out = self.envelope("run.terminal.failed",
+                            {"kind": "run_terminal", "terminal": "failed", "reason": "boom"})
+        result = parse("muse", 1, out, "")
+        self.assertEqual(result.status, "error")
+        self.assertIn("boom", result.error)
+
+    def test_quota_and_auth_fall_back_to_message_matching(self):
+        out = self.terminal("x")
+        self.assertEqual(parse("muse", 1, out, "rate limit exceeded").status, "rate_limited")
+        self.assertEqual(parse("muse", 1, "", "connection reset").status, "transient")
+        self.assertEqual(parse("muse", 1, "", "nothing happened").status, "error")
+
+    def test_session_id_reads_the_envelope_stream(self):
+        self.assertEqual(session_id("muse", self.terminal("x")), self.SID)
+        self.assertIsNone(session_id("muse", "no json here"))
+
+    def test_no_telemetry_is_unknown_not_empty(self):
+        with self.assertRaises(FileNotFoundError):
+            muse_limits(tempfile.gettempdir())
+        with patch("loop.adapters.muse_limits", return_value={"muse": 1}) as muse:
+            self.assertEqual(provider_limits("muse", "."), {"muse": 1})
+            self.assertTrue(muse.called)
+
+    def test_no_auth_probe_means_unknown(self):
+        self.assertIsNone(auth_probe("muse", "."))
+
+    def test_lite_surfaces_offered_catalog_models(self):
+        from loop.lite import DEFAULT_CATALOG, PROVIDERS, CLI, available_models
+        self.assertIn("muse", PROVIDERS)
+        self.assertEqual(CLI["muse"], "muse")
+        tiers = {entry["tier"]: entry for entry in DEFAULT_CATALOG
+                 if entry["provider"] == "muse"}
+        self.assertEqual(set(tiers), {"light", "standard", "strong"})
+        self.assertEqual(tiers["standard"]["model"], "muse-spark-1.3-contributor")
+        # Use a fixture catalogue: installed CLI offerings can change independently.
+        with tempfile.TemporaryDirectory() as directory, patch("pathlib.Path.home", return_value=Path(directory)):
+            catalog=Path(directory)/".local/share/muse/model-catalog"
+            catalog.mkdir(parents=True)
+            (catalog/"models.json").write_text(json.dumps({"rows":[
+                {"model_id":"muse-spark-1.3-contributor","visibility":"visible"},
+                {"model_id":"hidden-model","visibility":"hidden"}]}))
+            self.assertEqual(available_models("muse"),{"muse-spark-1.3-contributor"})
+
+    def test_plan_validation_accepts_muse_tasks_reviews_and_budgets(self):
+        plan = {"id": "muse-plan", "provider_token_budgets": {"muse": 1000},
+                "failure_review_provider": "muse",
+                "tasks": [{"id": "one", "provider": "muse", "files": ["answer.py"],
+                           "prompt": "write answer", "check": ["python3", "-c", "pass"],
+                           "review": {"provider": "muse", "instructions": "looks right"}}]}
+        validate_plan(plan)
 
 
 if __name__ == "__main__":

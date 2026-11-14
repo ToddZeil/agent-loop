@@ -153,7 +153,7 @@ def read_active_workers(project_roots, live_runs):
 def read_provider_usage(project_root):
     """Return numeric provider usage plus locally cached quota percentages."""
     usage = {name: {"tokens": 0, "calls": 0, "input": 0, "output": 0, "cached": 0, "usd": 0.0, "quota": {}}
-             for name in ("codex", "claude", "antigravity")}
+             for name in ("codex", "claude", "antigravity", "muse")}
     db_path = project_root / ".agent-loop" / "state.sqlite"
     if db_path.exists():
         try:
