@@ -1094,7 +1094,9 @@ async def native_action(request):
                 except (OSError, ValueError, RuntimeError) as exc:
                     atomic_json(fleet.manifest, {**spec, 'desired_running': False})
                     start_error = str(exc)
-    return web.json_response({'ok': True, 'start_error': start_error})
+    ready = (request.match_info['op'] == 'request' and not reconcile
+             and not lock_held(run.path('keeper.lock')))
+    return web.json_response({'ok': True, 'start_error': start_error, 'native_ready': ready})
 
 
 async def terminal_close(request):

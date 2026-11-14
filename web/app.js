@@ -483,9 +483,12 @@ $('open-native').onclick=async()=>{
   }
   try {
     nativeReconnectAttempts=0;nativeReturning=true;selectTab('native');
-    await api(taskURL()+'/native/request',currentTask()?.terminal_requested ? {} : nativeBody());
+    const key=`${selectedFleet}/${selectedTask}`;
+    const result=await api(taskURL()+'/native/request',currentTask()?.terminal_requested ? {} : nativeBody());
+    if(key !== `${selectedFleet}/${selectedTask}`) return;
     document.querySelector('.native-options').open=false;
-    nativeTakeover=`${selectedFleet}/${selectedTask}`;nativeReturning=false;nativeAutoAttach=`${selectedFleet}/${selectedTask}`;
+    nativeTakeover=key;nativeReturning=false;nativeAutoAttach=key;
+    if(result.native_ready) { nativeAutoAttach=null; nativeTakeover=null; await connectTerminal('agent',true); }
     await refresh();
   } catch(e) { nativeAutoAttach=null; toast(e.message,true); } finally {nativeReturning=false;}
 };

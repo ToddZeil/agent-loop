@@ -284,6 +284,7 @@ for line in sys.stdin:
         response=await self.post(endpoint+'/native/request',{'program':'custom','command':command,
             'resume_command':command+' --resume "{session_id}"'})
         self.assertEqual(response.status,200,await response.text())
+        self.assertTrue((await response.json())['native_ready'])
         ws=await self.client.ws_connect(endpoint+'/terminal?mode=agent',headers={'Origin':self.origin})
         await self.output_until(ws,b'TTY=True')
         await ws.send_json({'type':'input','data':'direct custom input\n'})

@@ -520,6 +520,61 @@ test('Add agents clearly loads the Codex model list before selection',async ({pa
 });
 
 
+test('idle agent terminal connects while its status refresh is delayed', async ({page}) => {
+  await page.goto('/');
+  await page.waitForFunction(() => typeof currentTask === 'function' && currentTask());
+  await page.getByRole('tab',{name:'Agent terminal',exact:true}).click();
+  let release, refreshStarted;
+  const gate = new Promise(resolve => { release = resolve; });
+  const started = new Promise(resolve => { refreshStarted = resolve; });
+  await page.route('**/api/supervisor', async route => {
+    refreshStarted();
+    await gate;
+    await route.continue();
+  });
+  try {
+    await page.locator('#open-native').click();
+    await started;
+    await expect(page.locator('#native-status')).toContainText('Connected',{timeout:10000});
+    await page.locator('#native-terminal .xterm-helper-textarea').focus();
+    await page.keyboard.type('before refresh');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => terminal && Array.from({length:terminal.buffer.active.length},(_,i)=>terminal.buffer.active.getLine(i)?.translateToString()||'').join('\n').includes('Codex reply: before refresh'));
+  } finally {
+    release();
+    await page.unrouteAll({behavior:'wait'});
+  }
+  await page.locator('#return-native').click();
+  await expect(page.locator('#task-status')).toHaveText('complete',{timeout:20000});
+  await page.locator('#stop').click();
+});
+
+test('active worker yields its terminal only after the current turn', async ({page,request}) => {
+  const fixture=await (await request.get('/test-fixture')).json();
+  await page.goto('/');
+  await page.locator('#new-fleet').click();
+  await page.getByLabel('Repository root',{exact:true}).fill(fixture.repo);
+  await page.getByLabel('Goal',{exact:true}).fill('WATCH_WORKER_OUTPUT: set value to 2.');
+  await page.getByRole('button',{name:'Add & start supervisor'}).click();
+  await page.getByRole('tab',{name:'Conversation',exact:true}).click();
+  await expect(page.locator('#worker-terminal-output')).toContainText('Worker is running; live output is available.');
+  await expect(page.locator('#task-status')).toHaveText('working');
+  await page.getByRole('tab',{name:'Agent terminal',exact:true}).click();
+  const response=page.waitForResponse(response => response.url().endsWith('/native/request'));
+  await page.locator('#open-native').click();
+  expect((await (await response).json()).native_ready).toBe(false);
+  await expect(page.locator('#native-status')).toContainText('Waiting for the current worker turn');
+  expect(await page.evaluate(() => !!socket)).toBe(false);
+  await expect(page.locator('#native-status')).toContainText('Connected',{timeout:20000});
+  await page.locator('#native-terminal .xterm-helper-textarea').focus();
+  await page.keyboard.type('after handoff');
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => terminal && Array.from({length:terminal.buffer.active.length},(_,i)=>terminal.buffer.active.getLine(i)?.translateToString()||'').join('\n').includes('Codex reply: after handoff'));
+  await page.locator('#return-native').click();
+  await expect(page.locator('#task-status')).toHaveText('complete',{timeout:20000});
+  await page.locator('#stop').click();
+});
+
 test('actual interactive terminal supports direct typing, reconnect, and other supervised workers',async ({page,request})=>{
   const fixture=await (await request.get('/test-fixture')).json();
   await page.goto('/');
