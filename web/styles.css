@@ -250,3 +250,19 @@ dialog label { display: block; font-size: 11px; color: #a1b39e; margin-top: 16px
 .settings-actions {display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px}
 #deploy-status {flex-basis:100%;white-space:normal;overflow-wrap:anywhere;line-height:1.5}
 #deploy-log {text-decoration:none}
+
+/* Card selection and options are separate controls so every agent is easy to manage. */
+.worker-card { position: relative; }
+.worker-select { display: block; width: 100%; padding: 0; border: 0; color: inherit; background: transparent; text-align: left; cursor: pointer; font: inherit; }
+.worker-select:focus-visible { outline: 2px solid #bde990; outline-offset: 5px; border-radius: 3px; }
+.worker-card .worker-top { padding-right: 32px; }
+.agent-card-menu { position: absolute; top: 10px; right: 10px; z-index: 2; }
+.agent-card-menu[open] { z-index: 3; }
+.agent-card-menu summary { display: grid; place-items: center; width: 32px; height: 32px; border: 1px solid #52654c; border-radius: 6px; background: #202b21; font-size: 22px; cursor: pointer; list-style: none; }
+.agent-card-menu summary::-webkit-details-marker { display: none; }
+.agent-card-actions { position: absolute; right: 0; top: 36px; display: grid; min-width: 180px; padding: 6px; border: 1px solid #52654c; border-radius: 8px; background: #202b21; box-shadow: 0 8px 24px #0008; }
+.agent-card-actions button { border: 0; border-radius: 4px; padding: 10px; color: var(--text); background: transparent; text-align: left; cursor: pointer; }
+.agent-card-actions button:hover { background: #303c33; }
+.agent-card-actions button.danger { color: #e4b59f; }
+.agent-card-actions button:disabled { opacity: .5; cursor: default; }
+.cleanup-status { color: #e4b59f; font-size: 12px; overflow-wrap: anywhere; }

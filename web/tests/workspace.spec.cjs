@@ -170,6 +170,45 @@ test('delete and clean up current and archived agents, with cancellation', async
   }
 });
 
+test('tile options delete a working agent while the supervisor and other agents stay running', async ({page,request}) => {
+  const fixture = await (await request.get('/test-fixture')).json();
+  await page.goto('/');
+  await page.evaluate(async ({repo,acceptance}) => {
+    await api('/supervisor/agents', {start:true, tasks:[
+      {id:'menu-keep',repo,goal:'Set value to 2',acceptance:[acceptance]},
+      {id:'menu-delete',repo,goal:'WATCH_WORKER_OUTPUT',acceptance:['true']}
+    ]});
+    await refresh();
+  }, fixture);
+  await page.locator('[data-task="menu-delete"]').click();
+  await expect(page.locator('#task-status')).toHaveText('working', {timeout:15000});
+  await page.locator('[data-task="menu-keep"]').click();
+  const card = page.locator('[data-task="menu-delete"]');
+  await card.locator('summary').click();
+  await expect(page.locator('#task-title')).toHaveText('menu-keep');
+  await expect(card.getByRole('button', {name:'Delete & clean up',exact:true})).toBeEnabled();
+  page.once('dialog', dialog => dialog.dismiss());
+  await card.getByRole('button', {name:'Delete & clean up',exact:true}).click();
+  await expect(card).toBeVisible();
+  page.once('dialog', dialog => dialog.accept());
+  await card.getByRole('button', {name:'Delete & clean up',exact:true}).click();
+  await expect(card).toContainText('Deletion queued');
+  await page.reload();
+  await expect(card).toHaveCount(0, {timeout:20000});
+  await expect(page.locator('[data-task="menu-keep"]')).toBeVisible();
+  await expect(page.locator('#manager-state')).toContainText('running');
+  await page.setViewportSize({width:390,height:844});
+  await page.locator('[data-task="menu-keep"] summary').click();
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth)).toBe(false);
+  // Exercise Archive from the same tile menu, preserving its worktree for restore.
+  await page.locator('[data-task="menu-keep"] [data-archive]').click();
+  await expect(page.locator('[data-restore="menu-keep"]')).toBeVisible({timeout:10000});
+  await page.locator('[data-restore="menu-keep"]').click();
+  await expect(page.locator('[data-task="menu-keep"]')).toBeVisible();
+  await page.evaluate(async () => { await api('/supervisor/agents/menu-keep/delete',{confirm:true}); });
+  await expect(page.locator('[data-task="menu-keep"]')).toHaveCount(0,{timeout:10000});
+});
+
 test('local keeper is optional and can be enabled or disabled without replacing the supervisor',async ({page}) => {
   await page.goto('/');
   await page.locator('#supervisor-settings').click();

@@ -355,6 +355,12 @@ Other project agents cannot deploy over this workspace's repository through the 
 
 Failed deployments name the failing browser/Python tests when available. Use
 **View deployment log** beside the progress message for full details; failed checks
-leave publication and the current server untouched. Permanent agent deletion
-requires stopping scheduling and waiting for the worker to finish first; disabled
-delete controls explain that prerequisite.
+leave publication and the current server untouched.
+
+Use the **⋯** options button on an agent tile to **Archive agent** or **Delete & clean up**.
+Deletion is also available in Agent settings and the archived agents list. After
+confirmation, it closes that agent’s terminal and stops scheduling new turns for
+that agent. Its current turn finishes before the worktree, worker branch and saved
+run history are deleted. Other agents keep running. Pending cleanup appears on the
+tile; failures show the reason and offer **Retry cleanup**. Deletion requests survive
+a server restart. The project repository is kept.

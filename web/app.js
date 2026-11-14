@@ -119,8 +119,8 @@ function chooseFleet(id) {
 }
 function render() {
   if (!currentFleet() && fleets.length) selectedFleet = fleets[0].id;
-  const fleet = currentFleet(), allTasks = fleet?.tasks || [], tasks = allTasks.filter(t => t.enabled !== false || t.attempt);
-  renderArchived(allTasks.filter(t => t.enabled === false && !t.attempt));
+  const fleet = currentFleet(), allTasks = fleet?.tasks || [], tasks = allTasks.filter(t => t.enabled !== false || t.attempt || t.delete_requested);
+  renderArchived(allTasks.filter(t => t.enabled === false && !t.attempt && !t.delete_requested));
   if (!tasks.some(t => t.id === selectedTask)) selectedTask = tasks[0]?.id || null;
   $('fleet-count').textContent = fleets.length;
   $('fleet-list').innerHTML = fleets.map(f => `<button class="fleet-link ${f.id === selectedFleet ? 'active' : ''}" data-fleet="${escapeHTML(f.id)}"><span>${escapeHTML(f.name)}</span><small>${f.tasks.length}</small></button>`).join('');
@@ -152,12 +152,17 @@ function render() {
       : status === 'working' ? ['working','verifying'].includes(t.state) : t.state === status);
     return matchesQuery && matchesStatus;
   });
+  const openAgentMenu = $('workers').querySelector('details[open]')?.dataset.agentMenu;
   $('workers').innerHTML = visibleTasks.map(t => {
     const hold = Object.values(t.provider_holds || {}).filter(h => h.until > Date.now()/1000).sort((a,b) => a.until-b.until)[0];
     const wait = t.state === 'waiting' ? `<div class="worker-wait">${escapeHTML(t.wait_reason?.slice(0,180))}${hold ? ` · reset in <span data-until="${hold.until}">${countdown(hold.until)}</span>` : t.retry_at ? ` · retry in <span data-until="${t.retry_at}">${countdown(t.retry_at)}</span>` : ''}</div>` : '';
-    return `<button class="worker-card ${t.id === selectedTask ? 'selected' : ''}" data-task="${escapeHTML(t.id)}"><div class="worker-top"><strong>${escapeHTML(agentName(t))}</strong>${pill(t.signal || t.state)}</div><span class="repo" title="${escapeHTML(t.repo)}">${escapeHTML(t.repo.split(/[\\/]/).filter(Boolean).pop())}</span><div class="goal">${escapeHTML(t.goal || t.next_action)}</div>${wait}<div class="worker-bottom"><span class="model">${escapeHTML(t.provider)} / ${escapeHTML(t.model || 'default')}</span><span>${t.turns} turns · ${tokenNumber(t.usage ? t.usage.agent.total_tokens : Object.values(t.tokens || {}).reduce((a,b) => a+b,0))} tokens</span></div></button>`;
+    return `<article class="worker-card ${t.id === selectedTask ? 'selected' : ''}" data-task="${escapeHTML(t.id)}"><button class="worker-select" aria-label="Open agent ${escapeHTML(agentName(t))}"><div class="worker-top"><strong>${escapeHTML(agentName(t))}</strong>${pill(t.signal || t.state)}</div><span class="repo" title="${escapeHTML(t.repo)}">${escapeHTML(t.repo.split(/[\\/]/).filter(Boolean).pop())}</span><div class="goal">${escapeHTML(t.goal || t.next_action)}</div>${wait}<div class="worker-bottom"><span class="model">${escapeHTML(t.provider)} / ${escapeHTML(t.model || 'default')}</span><span>${t.turns} turns · ${tokenNumber(t.usage ? t.usage.agent.total_tokens : Object.values(t.tokens || {}).reduce((a,b) => a+b,0))} tokens</span></div>${t.delete_requested ? `<p class="cleanup-status">${escapeHTML(t.delete_error ? 'Cleanup failed: '+t.delete_error : 'Deletion queued · waiting for this agent’s current turn to finish.')}</p>` : ''}</button><details class="agent-card-menu" data-agent-menu="${escapeHTML(t.id)}" ${openAgentMenu === t.id ? 'open' : ''}><summary aria-label="Options for ${escapeHTML(agentName(t))}">⋯</summary><div class="agent-card-actions"><button data-archive="${escapeHTML(t.id)}" ${t.delete_requested || t.terminal_requested ? 'disabled' : ''}>Archive agent</button><button class="danger" data-delete="${escapeHTML(t.id)}" ${t.delete_requested && !t.delete_error ? 'disabled' : ''}>${t.delete_error ? 'Retry cleanup' : 'Delete &amp; clean up'}</button></div></details></article>`;
   }).join('') || '<p class="list-empty">No matching agents.</p>';
-  $('workers').querySelectorAll('button').forEach(b => b.onclick = () => chooseTask(b.dataset.task));
+  $('workers').querySelectorAll('[data-task]').forEach(card => {
+    card.querySelector('.worker-select').onclick = () => chooseTask(card.dataset.task);
+  });
+  $('workers').querySelectorAll('[data-delete]').forEach(button => button.onclick = () => deleteAgent(button.dataset.delete));
+  $('workers').querySelectorAll('[data-archive]').forEach(button => button.onclick = () => archiveAgent(button.dataset.archive));
   const task = currentTask();
   if (!task) return;
   if (!$('full-access').disabled) $('full-access').checked = task.full_access !== false;
@@ -183,9 +188,10 @@ function render() {
   $('deploy-log').hidden=!deployment?.job || task.repo !== deployment.checkout;
   if(deployment?.job) $('deploy-log').href='/api/deploy/jobs/'+encodeURIComponent(deployment.job.id)+'/log';
   $('deploy-status').textContent=deployment?.job ? `Deploy ${deployment.job.id.slice(0,6)}: ${deployment.job.stage}${deployment.job.error ? ' · '+deployment.job.error : ''}` : '';
-  $('delete-agent').disabled=!!fleet.running || !!task.attempt || !!task.terminal_requested || !!task.terminal_open;
-  $('delete-agent').title=$('delete-agent').disabled ? 'Stop scheduling, finish the worker turn and close its terminal before deleting.' : 'Permanently delete this agent and clean up its worktree.';
-  $('remove-agent').disabled = task.enabled === false || !!task.terminal_requested;
+  $('delete-agent').disabled=!!task.delete_requested && !task.delete_error;
+  $('delete-agent').textContent=task.delete_error ? 'Retry cleanup' : task.delete_requested ? 'Deletion queued…' : 'Delete & clean up';
+  $('delete-agent').title='Close this agent’s terminal and delete it after its current turn finishes.';
+  $('remove-agent').disabled = task.enabled === false || !!task.delete_requested || !!task.terminal_requested;
   $('task-meta').textContent = `Agent ID: ${task.id}\n${task.branch}\n${task.worktree}`;
   $('task-meta').style.whiteSpace = 'pre-wrap';
   renderAgentUsage(task);
@@ -200,7 +206,7 @@ function render() {
     $('native-custom').hidden=$('native-program').value !== 'custom';
   }
   for(const id of ['native-program','native-command','native-resume']) $(id).disabled=!!task.terminal_requested;
-  $('open-native').disabled=socket?.readyState === WebSocket.CONNECTING;
+  $('open-native').disabled=!!task.delete_requested || socket?.readyState === WebSocket.CONNECTING;
   $('restart-native').disabled=!task.terminal_requested || !!task.attempt;
   $('open-native').textContent=nativeConnected ? 'Show terminal' : task.terminal_open && task.terminal_mode !== 'shell' ? 'Reconnect here' : task.terminal_requested && !task.native_ready ? 'Waiting for current turn…' : task.native_session_id ? 'Resume agent chat' : 'Open Agent terminal';
   $('return-native').disabled=!task.terminal_requested;
@@ -209,7 +215,9 @@ function render() {
   if(!nativeReturning && (nativeAutoAttach === `${selectedFleet}/${selectedTask}` || (activeTab === 'native' && task.terminal_requested && !socket)) && (task.native_ready || (task.terminal_open && task.terminal_mode !== 'shell'))) {
     nativeAutoAttach=null; const takeover=nativeTakeover === `${selectedFleet}/${selectedTask}`;nativeTakeover=null;connectTerminal('agent',takeover).catch(e=>toast(e.message,true));
   }
-  $('open-terminal').disabled = fleet.running || !!task.attempt || ['working','verifying','commit_pending'].includes(task.state) || socket?.readyState === WebSocket.OPEN;
+  $('note').disabled = !!task.delete_requested;
+  $('note-form').querySelector('button[type=submit]').disabled = !!task.delete_requested;
+  $('open-terminal').disabled = !!task.delete_requested || fleet.running || !!task.attempt || ['working','verifying','commit_pending'].includes(task.state) || socket?.readyState === WebSocket.OPEN;
   $('open-terminal').textContent = task.terminal_open ? 'Reconnect shell' : 'Open terminal';
   $('close-terminal').disabled = !task.terminal_open && !terminalKey;
   const decisions = task.decisions || [];
@@ -599,24 +607,26 @@ function applySupervisor(supervisor) {
 }
 function renderArchived(tasks) {
   $('removed-agents').hidden = tasks.length === 0;
-  $('archived-agents').innerHTML = tasks.length ? tasks.map(t=>`<button class="button quiet" data-restore="${escapeHTML(t.id)}">↶ ${escapeHTML(agentName(t))}</button><button class="button small danger" data-delete="${escapeHTML(t.id)}" ${currentFleet()?.running || t.attempt || t.terminal_requested || t.terminal_open ? 'disabled title="Stop scheduling and finish the worker turn before deleting."' : ''}>Delete &amp; clean up ${escapeHTML(agentName(t))}</button>`).join('') : '<small class="muted">None</small>';
+  $('archived-agents').innerHTML = tasks.length ? tasks.map(t=>`<button class="button quiet" data-restore="${escapeHTML(t.id)}">↶ ${escapeHTML(agentName(t))}</button><button class="button small danger" data-delete="${escapeHTML(t.id)}" >Delete &amp; clean up ${escapeHTML(agentName(t))}</button>`).join('') : '<small class="muted">None</small>';
   $('archived-agents').querySelectorAll('[data-delete]').forEach(button => button.onclick = () => deleteAgent(button.dataset.delete));
   $('archived-agents').querySelectorAll('[data-restore]').forEach(button=>button.onclick=async()=>{
     try { await api(`/supervisor/agents/${encodeURIComponent(button.dataset.restore)}/restore`,{}); await refresh(); toast('Agent restored.'); } catch(e) { toast(e.message,true); }
   });
 }
 async function deleteAgent(id) {
-  if (!window.confirm(`Permanently delete agent "${id}"? This discards all uncommitted files and commits on its worker branch, its worktree, and saved conversation/run history. This cannot be undone. The project repository is kept.`)) return;
+  if (!window.confirm(`Permanently delete agent "${id}"? This discards all uncommitted files and commits on its worker branch, its worktree, and saved conversation/run history. This cannot be undone. Its open terminal will close; any current worker turn will finish before cleanup. Other agents keep running. The project repository is kept.`)) return;
   try {
-    await api(`/supervisor/agents/${encodeURIComponent(id)}/delete`, {confirm:true});
-    await refresh(); toast('Agent deleted; worktree, worker branch and saved history cleaned up.');
+    const result = await api(`/supervisor/agents/${encodeURIComponent(id)}/delete`, {confirm:true});
+    await refresh(); if(result.cleanup_error) { toast('Cleanup failed: '+result.cleanup_error,true); return; }
+    toast(result.queued ? 'Deletion queued. This agent will be cleaned up after its current turn finishes.' : 'Agent deleted; worktree, worker branch and saved history cleaned up.');
   } catch(e) { toast(e.message,true); }
 }
 $('delete-agent').onclick = () => deleteAgent(selectedTask);
-$('remove-agent').onclick = async () => {
-  try { await api(`/supervisor/agents/${encodeURIComponent(selectedTask)}/remove`,{}); await refresh(); toast('Agent removed from scheduling. Its current turn finishes; files are kept.'); }
+async function archiveAgent(id) {
+  try { await api(`/supervisor/agents/${encodeURIComponent(id)}/remove`,{}); await refresh(); toast('Agent archived. Its current turn finishes; files are kept.'); }
   catch(e) { toast(e.message,true); }
-};
+}
+$('remove-agent').onclick = () => archiveAgent(selectedTask);
 $('supervisor-settings').onclick = () => {
   const supervisor = currentFleet(); if(!supervisor) return;
   const form = $('supervisor-form'); form.elements.provider.value = supervisor.supervisor.provider;

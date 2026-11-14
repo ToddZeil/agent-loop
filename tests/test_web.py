@@ -64,19 +64,17 @@ class WebTests(unittest.IsolatedAsyncioTestCase):
         response = await self.post(url, {})
         self.assertEqual(response.status, 400)
         self.assertTrue(run.worktree.exists())
-        with mock.patch.object(self.controller, 'running', return_value=True):
-            response = await self.post(url, {'confirm': True})
-            self.assertEqual(response.status, 400)
         from loop.web import locked
         with locked(run.path('keeper.lock')):
+            with mock.patch.object(self.controller, 'running', return_value=True):
+                response = await self.post(url, {'confirm': True})
+                self.assertEqual(response.status, 202)
             response = await self.post(url, {'confirm': True})
-            self.assertEqual(response.status, 409)
-        state = run.state()
-        run.save_state({**state, 'attempt': 'active'})
-        response = await self.post(url, {'confirm': True})
-        self.assertEqual(response.status, 400)
-        run.save_state(state)
-        await self.post('/api/supervisor/agents/fix/remove', {})
+            self.assertEqual(response.status, 202)
+            self.assertTrue(run.worktree.exists())
+            spec = json.loads(self.controller.fleet(entry['id']).manifest.read_text())
+            self.assertFalse(spec['tasks'][0]['enabled'])
+            self.assertTrue(spec['tasks'][0]['delete_requested'])
         response = await self.post(url, {'confirm': True})
         self.assertEqual(response.status, 200, await response.text())
         self.assertFalse(run.worktree.exists())
@@ -88,6 +86,27 @@ class WebTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(spec['tasks'], [])
         response = await self.post('/api/supervisor/agents', {'tasks': [task]})
         self.assertEqual(response.status, 201, await response.text())
+
+    async def test_delete_closes_terminal_and_cleanup_failure_can_be_retried(self):
+        response = await self.post('/api/supervisor/agents', {'tasks': self.manifest['tasks']})
+        self.assertEqual(response.status, 201)
+        entry = self.controller.supervisor()
+        run = self.controller.run_for(entry['id'], 'fix')
+        terminal = Terminal(run, '/bin/sh')
+        self.controller.terminals[(entry['id'], 'fix')] = terminal
+        url = '/api/supervisor/agents/fix/delete'
+        with mock.patch('loop.web.deploy.git', side_effect=RuntimeError('worktree is locked')):
+            response = await self.post(url, {'confirm': True})
+        self.assertEqual(response.status, 202)
+        self.assertTrue(terminal.exited)
+        self.assertTrue(run.worktree.exists())
+        result = await response.json()
+        self.assertIn('worktree is locked', result['cleanup_error'])
+        state = (await (await self.client.get('/api/supervisor')).json())['supervisor']
+        self.assertEqual(state['tasks'][0]['signal'], 'cleanup failed')
+        response = await self.post(url, {'confirm': True})
+        self.assertEqual(response.status, 200, await response.text())
+        self.assertFalse(run.worktree.exists())
 
     async def test_model_catalog_and_idle_agent_model_correction(self):
         cache=self.root/'codex';cache.mkdir()
@@ -527,6 +546,22 @@ print(json.dumps({'type':'turn.completed','usage':{'input_tokens':10}}))
                 removed=next(t for t in state['tasks'] if t['id']=='remove-active')
                 self.assertEqual(removed['signal'],'removed')
                 self.assertEqual(removed['turns'],1)
+                response = await self.post('/api/supervisor/agents', {'tasks': [
+                    {**self.manifest['tasks'][0], 'id': 'delete-active', 'goal': 'ASK_ONLY'}]})
+                self.assertEqual(response.status, 201)
+                run = self.controller.run_for(supervisor['id'], 'delete-active')
+                async with asyncio.timeout(10):
+                    while not run.state()['attempt']:
+                        await asyncio.sleep(.05)
+                response = await self.post('/api/supervisor/agents/delete-active/delete', {'confirm': True})
+                self.assertEqual(response.status, 202, await response.text())
+                async with asyncio.timeout(15):
+                    while run.dir.exists():
+                        await asyncio.sleep(.1)
+                self.assertFalse(run.worktree.exists())
+                self.assertTrue(self.controller.running(supervisor))
+                self.assertEqual(self.controller.processes[supervisor['id']].pid, pid)
+                self.assertTrue(self.controller.run_for(supervisor['id'], 'second').worktree.exists())
                 self.assertNotIn('supervisor',(self.root/'calls').read_text())
                 # The deterministic keeper restarts an unexpectedly dead manager, not a new supervisor.
                 process=self.controller.processes[supervisor['id']]

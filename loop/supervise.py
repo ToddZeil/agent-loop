@@ -617,6 +617,8 @@ class Fleet:
         task = next((t for t in spec['tasks'] if t['id'] == ident), None)
         if task is None:
             raise ValueError('Unknown agent')
+        if task.get('delete_requested'):
+            raise ValueError('This agent is queued for deletion')
         task['enabled'] = enabled
         atomic_json(self.manifest, spec)
 
@@ -626,6 +628,8 @@ class Fleet:
 
     def prepare(self):
         for task, run in self.runs():
+            if task.get('delete_requested') and (self.home / 'deletions' / (str(task['delete_requested']) + '.ready')).exists():
+                continue
             if not run.path('continuous.json').exists():
                 options = {**task['options'],
                            'acceptance': task['acceptance'], 'workflow': 'supervised'}
@@ -638,6 +642,8 @@ class Fleet:
     def note(self, task_id, text):
         for task, run in self.runs():
             if task['id'] == task_id:
+                if task.get('delete_requested'):
+                    raise ValueError('This agent is queued for deletion')
                 run.note(text)
                 return
         raise ValueError('Unknown task: ' + task_id)
@@ -666,7 +672,19 @@ class Fleet:
                         break
                     runs = []
                     for task, fresh in self.runs():
+                        deletion = task.get('delete_requested')
+                        ready = self.home / 'deletions' / (str(deletion) + '.ready')
+                        if deletion and ready.exists():
+                            continue  # Web cleanup may already have removed this run directory.
                         current = fresh.state()
+                        if (deletion and task['id'] not in pending and not current['attempt']):
+                            owner = owners.pop(task['id'], None)
+                            if owner:
+                                owner.close()
+                            known.pop(task['id'], None)
+                            ready.parent.mkdir(parents=True, exist_ok=True)
+                            ready.touch()
+                            continue
                         if (task.get('terminal_requested') and task['id'] not in pending
                                 and not current['attempt'] and current['state'] not in ('working', 'verifying', 'commit_pending')):
                             owner = owners.pop(task['id'], None)

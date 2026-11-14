@@ -319,7 +319,7 @@ class Controller:
                 task.get('last_provider_status') in ('rate_limited', 'provider_wait')
                 or any(h.get('until', 0) > time.time() for h in task.get('provider_holds', {}).values())
                 or any(word in reason for word in ('quota', 'usage limit', 'usage reset')))
-            task['signal'] = ('interactive' if task['terminal_open'] and task['terminal_mode'] != 'shell' else
+            task['signal'] = ('cleanup failed' if task.get('delete_error') else 'deleting' if task.get('delete_requested') else 'interactive' if task['terminal_open'] and task['terminal_mode'] != 'shell' else
                               'handoff' if task['terminal_requested'] else ('stopping' if task['attempt'] else 'removed') if not task['enabled'] else (
                 'supervisor' if result['running'] and shared.get('busy') == run_ids[task['id']] else
                 'quota' if quota_wait else 'retrying' if task['state'] == 'waiting' and task['retry_at'] else
@@ -367,6 +367,44 @@ class Controller:
                     except ProcessLookupError:
                         pass
 
+    async def finish_deletions(self, entry):
+        """Called under mutation; a running manager acknowledges each turn boundary."""
+        fleet = Fleet(entry['home'])
+        spec = json.loads(fleet.manifest.read_text())
+        for task in list(spec['tasks']):
+            token = task.get('delete_requested')
+            if not token or task.get('delete_error'):
+                continue
+            ready = fleet.home / 'deletions' / (token + '.ready')
+            running = self.running(entry)
+            if running and not ready.exists():
+                continue
+            run = self.run_for(entry['id'], task['id'])
+            try:
+                with ExitStack() as locks:
+                    if not running:
+                        locks.enter_context(locked(fleet.home / 'fleet.lock'))
+                    locks.enter_context(locked(run.path('keeper.lock')))
+                    lock_path = workspace_lock_path(run.dir, run.worktree)
+                    lock_path.parent.mkdir(parents=True, exist_ok=True)
+                    locks.enter_context(locked(lock_path))
+                    if run.state().get('attempt'):
+                        continue
+                    # Git checks ownership; never recursively delete a supplied worktree path.
+                    if run.worktree.exists():
+                        await asyncio.to_thread(deploy.git, run.repo, 'worktree', 'remove', '--force', str(run.worktree))
+                    if deploy.git(run.repo, 'branch', '--list', run.branch):
+                        await asyncio.to_thread(deploy.git, run.repo, 'branch', '-D', run.branch)
+                    # Keep the ready receipt outside the run: a manager may hold an older snapshot.
+                    shutil.rmtree(run.dir)
+                    spec['tasks'] = [t for t in spec['tasks'] if t['id'] != task['id']]
+                    atomic_json(fleet.manifest, spec)
+            except BlockingIOError:
+                continue  # An external keeper/worker still owns this agent; retry next sweep.
+            except (OSError, ValueError, RuntimeError) as exc:
+                task['delete_error'] = str(exc)
+                atomic_json(fleet.manifest, spec)
+
     async def guardian(self, app):
         async def watch():
             while not self.stopping:
@@ -375,6 +413,7 @@ class Controller:
                         if self.primary_index.exists():
                             entry = self.supervisor()
                             fleet = Fleet(entry['home'])
+                            await self.finish_deletions(entry)
                             spec = json.loads(fleet.manifest.read_text())
                             if spec.get('desired_running') and not self.running(entry):
                                 if (fleet.home / 'stop').exists():
@@ -492,6 +531,8 @@ class Controller:
                     terminal = self.terminals.get((entry['id'], task['id']))
                     task['terminal_open'] = bool(terminal and not terminal.exited)
                     task['terminal_mode'] = terminal.mode if task['terminal_open'] else None
+                    task['delete_requested'] = bool(task_specs[task['id']].get('delete_requested'))
+                    task['delete_error'] = task_specs[task['id']].get('delete_error')
                     task['terminal_requested'] = bool(task_specs[task['id']].get('terminal_requested'))
                     native = terminal_config(runs[task['id']])
                     task['native_config'] = {**native, 'command_text': shlex.join(native.get('command', [])),
@@ -531,7 +572,7 @@ class Controller:
         fleet = Fleet(entry['home'])
         # Refuse takeover of an externally opened keeper or workspace as well.
         for task, run in fleet.runs():
-            if task.get('terminal_requested'):
+            if task.get('terminal_requested') or task.get('delete_requested'):
                 continue
             if lock_held(run.path('keeper.lock')):
                 raise ValueError('A task keeper or terminal already owns this run')
@@ -696,29 +737,26 @@ async def supervisor_agent_delete(request):
         task = next((t for t in spec['tasks'] if t['id'] == request.match_info['task']), None)
         if task is None:
             raise ValueError('Unknown agent')
-        if c.running(entry):
-            raise ValueError('Stop scheduling and wait for the supervisor to stop before deleting an agent')
         run = c.run_for(entry['id'], task['id'])
         terminal = c.terminals.get((entry['id'], task['id']))
-        if task.get('terminal_requested') or (terminal and not terminal.exited):
-            raise ValueError('Close the worktree shell and return the Agent terminal before deleting')
-        if run.state().get('attempt'):
-            raise ValueError('Wait for the current worker turn to finish before deleting')
-        with ExitStack() as locks:
-            locks.enter_context(locked(fleet.home / 'fleet.lock'))
-            locks.enter_context(locked(run.path('keeper.lock')))
-            lock_path = workspace_lock_path(run.dir, run.worktree)
-            lock_path.parent.mkdir(parents=True, exist_ok=True)
-            locks.enter_context(locked(lock_path))
-            # Git validates worktree ownership; never recursively delete a supplied path.
-            if run.worktree.exists():
-                await asyncio.to_thread(deploy.git, run.repo, 'worktree', 'remove', '--force', str(run.worktree))
-            if deploy.git(run.repo, 'branch', '--list', run.branch):
-                await asyncio.to_thread(deploy.git, run.repo, 'branch', '-D', run.branch)
-            shutil.rmtree(run.dir)
-            atomic_json(fleet.manifest, {**spec, 'tasks': [t for t in spec['tasks'] if t['id'] != task['id']]})
-        c.terminals.pop((entry['id'], task['id']), None)
-    return web.json_response({'ok': True})
+        if terminal:
+            await terminal.close()
+            c.terminals.pop((entry['id'], task['id']), None)
+        task.update(enabled=False, terminal_requested=False,
+                    delete_requested=task.get('delete_requested') or uuid.uuid4().hex)
+        task.pop('delete_error', None)
+        atomic_json(fleet.manifest, spec)
+        await c.finish_deletions(entry)
+        remaining = json.loads(fleet.manifest.read_text())
+        pending = next((t for t in remaining['tasks'] if t['id'] == task['id']), None)
+        queued = pending is not None
+        cleanup_error = pending.get('delete_error') if pending else None
+        if queued and run.state().get('attempt') and not c.running(entry):
+            # Reconcile a detached turn before cleaning its workspace.
+            atomic_json(fleet.manifest, {**remaining, 'desired_running': True})
+            (fleet.home / 'stop').unlink(missing_ok=True)
+            c.resume(entry['id'])
+    return web.json_response({'ok': True, 'queued': queued, 'cleanup_error': cleanup_error}, status=202 if queued else 200)
 
 
 async def supervisor_action(request):
@@ -985,6 +1023,8 @@ async def native_action(request):
         task = next((t for t in spec['tasks'] if t['id'] == key[1]), None)
         if not task:
             raise ValueError('Unknown agent')
+        if task.get('delete_requested'):
+            raise ValueError('This agent is queued for deletion')
         run = c.run_for(*key)
         terminal = c.terminals.get(key)
         if request.match_info['op'] in ('request', 'session'):
@@ -1076,6 +1116,10 @@ async def terminal_socket(request):
     key = (request.match_info['fleet'], request.match_info['task'])
     async with c.mutation:
         run = c.run_for(*key)
+        spec = json.loads(c.fleet(key[0]).manifest.read_text())
+        task = next(t for t in spec['tasks'] if t['id'] == key[1])
+        if task.get('delete_requested'):
+            raise ValueError('This agent is queued for deletion')
         mode = request.query.get('mode', 'shell')
         if mode not in ('shell', 'codex', 'agent'):
             raise ValueError('Unknown terminal mode')
