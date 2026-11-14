@@ -114,7 +114,7 @@ def launch_job(path, root):
 
 
 def submit(source, message=''):
-    source = Path(source).resolve()
+    source = Path(git(Path(source).resolve(), 'rev-parse', '--show-toplevel')).resolve()
     target = read_target(source)
     root = Path(target['checkout'])
     if git(root, 'status', '--porcelain'):
@@ -253,6 +253,10 @@ def execute(path, *, host_factory=Host):
         for commit in (original, job['source_commit']):
             git(worktree, '-c', 'user.name=Local workspace', '-c', 'user.email=workspace@localhost',
                 'merge', '--no-edit', commit)
+        runtime = root / '.agent-loop' / 'web-venv'
+        if runtime.is_dir():
+            (worktree / '.agent-loop').mkdir(exist_ok=True)
+            (worktree / '.agent-loop' / 'web-venv').symlink_to(runtime, target_is_directory=True)
         dependencies = root / 'web' / 'node_modules'
         if dependencies.is_dir():
             changed = git(worktree, 'diff', original, '--name-only', '--', 'web/package.json', 'web/package-lock.json')

@@ -143,3 +143,13 @@ class DeployTests(unittest.TestCase):
         atomic_json(path,job)
         self.assertEqual(public_status(self.root)['job']['stage'],'failed')
         self.assertIn('process ended',public_status(self.root)['job']['error'])
+
+    def test_command_from_subdirectory_captures_the_entire_worktree(self):
+        subdirectory=self.source/'subdirectory';subdirectory.mkdir()
+        with mock.patch('loop.deploy.launch_job',return_value=999):
+            result=submit(subdirectory)
+        job=json.loads(Path(result['status_file']).read_text())
+        self.assertEqual(job['source'],str(self.source.resolve()))
+        self.assertEqual(git(self.source,'show',job['source_commit']+':app.py'),'value = 3')
+        self.assertIn('new.txt',git(self.source,'ls-tree','--name-only',job['source_commit']))
+        self.unchanged_worker()
