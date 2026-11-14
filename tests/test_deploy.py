@@ -153,3 +153,13 @@ class DeployTests(unittest.TestCase):
         self.assertEqual(git(self.source,'show',job['source_commit']+':app.py'),'value = 3')
         self.assertIn('new.txt',git(self.source,'ls-tree','--name-only',job['source_commit']))
         self.unchanged_worker()
+
+    def test_failed_browser_check_reports_test_names_and_retains_command_in_log(self):
+        from loop.deploy import failure_message
+        path=self.queue()
+        path.with_suffix('.log').write_text('  1) tests/workspace.spec.cjs:129:1 › delete and clean up agents \n  2) tests/workspace.spec.cjs:182:1 › token totals \n')
+        error=subprocess.CalledProcessError(1,['npm','--prefix','web','test'])
+        summary=failure_message(path,error)
+        self.assertIn('delete and clean up agents',summary)
+        self.assertIn('token totals',summary)
+        self.assertNotIn("Command '[",summary)

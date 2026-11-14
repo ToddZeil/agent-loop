@@ -352,3 +352,9 @@ Independent previews cannot replace it. Runtime settings and job logs live under
 `.agent-loop/deploy/`; the target records main, origin, launch arguments and checks.
 The deployment implementation uses the primary checkout even when a worker is old.
 Other project agents cannot deploy over this workspace's repository through the UI.
+
+Failed deployments name the failing browser/Python tests when available. Use
+**View deployment log** beside the progress message for full details; failed checks
+leave publication and the current server untouched. Permanent agent deletion
+requires stopping scheduling and waiting for the worker to finish first; disabled
+delete controls explain that prerequisite.

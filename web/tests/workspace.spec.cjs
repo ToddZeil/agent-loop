@@ -129,6 +129,10 @@ test('scan repositories, choose one, persist subagent toggle, and remove/restore
 test('delete and clean up current and archived agents, with cancellation', async ({page,request}) => {
   const fixture = await (await request.get('/test-fixture')).json();
   await page.goto('/');
+  await page.waitForFunction(()=>typeof currentTask==='function' && currentTask());
+  const wasRunning=await page.locator('#stop').isEnabled();
+  if(wasRunning) await page.locator('#stop').click();
+  await expect(page.locator('#manager-state')).toContainText('stopped',{timeout:10000});
   await page.evaluate(async repo => {
     await api('/supervisor/agents', {tasks:[{id:'delete-ui',repo,goal:'Cleanup test'}]});
     await refresh();
@@ -160,6 +164,10 @@ test('delete and clean up current and archived agents, with cancellation', async
   await page.locator('#delete-agent').click();
   await expect(page.locator('[data-task="delete-ui"]')).toHaveCount(0);
   await expect(page.locator('#toast')).toContainText('Agent deleted');
+  if(wasRunning) {
+    await page.locator('#resume').click();
+    await expect(page.locator('#manager-state')).toContainText('running');
+  }
 });
 
 test('local keeper is optional and can be enabled or disabled without replacing the supervisor',async ({page}) => {
@@ -605,7 +613,7 @@ test('merge and redeploy submits the selected worktree and exposes job progress'
     await route.fulfill({response,json:data});
   });
   await page.route('**/api/deploy',async route=>{
-    posted=route.request().postDataJSON();job={id:'deployment-test-job',stage:'checking'};
+    posted=route.request().postDataJSON();job={id:'0123456789abcdef',stage:'checking'};
     await route.fulfill({json:{id:job.id,url:'http://127.0.0.1:8776'}});
   });
   await page.goto('/');
@@ -614,8 +622,15 @@ test('merge and redeploy submits the selected worktree and exposes job progress'
   await agentSettings(page);
   await expect(page.locator('#deploy-agent')).toBeVisible();
   await page.locator('#deploy-agent').click();
-  await expect(page.locator('#toast')).toContainText('Deployment deploy');
+  await expect(page.locator('#toast')).toContainText('Deployment 012345');
   expect(posted).toEqual({source});
   await expect(page.locator('#deploy-agent')).toBeDisabled();
   await expect(page.locator('#deploy-status')).toContainText('checking');
+  job={...job,stage:'failed',error:'Browser tests failed: delete and clean up agents'};
+  await page.reload();
+  await page.waitForFunction(()=>typeof currentTask==='function' && currentTask());
+  await agentSettings(page);
+  await expect(page.locator('#deploy-agent')).toBeEnabled();
+  await expect(page.locator('#deploy-status')).toContainText('delete and clean up agents');
+  await expect(page.locator('#deploy-log')).toHaveAttribute('href','/api/deploy/jobs/0123456789abcdef/log');
 });

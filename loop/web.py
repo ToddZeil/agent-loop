@@ -1132,6 +1132,13 @@ async def terminal_socket(request):
     return ws
 
 
+async def deployment_log(request):
+    path=deploy.target_path(ROOT).parent/'jobs'/(request.match_info['job']+'.log')
+    if not path.is_file():
+        raise web.HTTPNotFound(text='Deployment log not found')
+    return web.Response(text=tail(path),content_type='text/plain')
+
+
 async def deploy_action(request):
     c = request.app[APP_KEY]
     body = await object_body(request)
@@ -1167,6 +1174,7 @@ def create_app(home):
         app.router.add_get('/vendor/' + route, file_handler(path))
     app.router.add_get('/api/state', state)
     app.router.add_post('/api/deploy', deploy_action)
+    app.router.add_get('/api/deploy/jobs/{job:[0-9a-f]{16}}/log', deployment_log)
     app.router.add_get('/api/supervisor', supervisor_state)
     app.router.add_get('/api/events', supervisor_events)
     app.router.add_post('/api/supervisor/settings', supervisor_settings)

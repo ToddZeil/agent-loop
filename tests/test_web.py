@@ -193,6 +193,17 @@ class WebTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(spec['desired_running'])
         self.assertTrue(spec['tasks'][0]['terminal_requested'])
 
+    async def test_deployment_log_is_available_with_local_auth_and_valid_job_id(self):
+        directory=self.root/'deployment';(directory/'jobs').mkdir(parents=True)
+        (directory/'jobs/0123456789abcdef.log').write_text('Browser tests failed: delete and clean up agents')
+        with mock.patch('loop.web.deploy.target_path',return_value=directory/'target.json'):
+            response=await self.client.get('/api/deploy/jobs/0123456789abcdef/log')
+            self.assertEqual(response.status,200)
+            self.assertIn('delete and clean up agents',await response.text())
+            self.assertEqual(response.content_type,'text/plain')
+            response=await self.client.get('/api/deploy/jobs/not-a-job/log')
+            self.assertEqual(response.status,404)
+
     async def test_deploy_route_accepts_known_worker_and_rejects_arbitrary_paths(self):
         entry=await self.create()
         run=self.controller.run_for(entry['id'],'fix')

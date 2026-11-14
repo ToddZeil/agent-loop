@@ -180,7 +180,11 @@ function render() {
   const deploymentBusy=deployment?.job && !['complete','failed'].includes(deployment.job.stage);
   $('deploy-agent').disabled=!!deploymentBusy;
   $('deploy-status').hidden=!deployment?.job || task.repo !== deployment.checkout;
+  $('deploy-log').hidden=!deployment?.job || task.repo !== deployment.checkout;
+  if(deployment?.job) $('deploy-log').href='/api/deploy/jobs/'+encodeURIComponent(deployment.job.id)+'/log';
   $('deploy-status').textContent=deployment?.job ? `Deploy ${deployment.job.id.slice(0,6)}: ${deployment.job.stage}${deployment.job.error ? ' · '+deployment.job.error : ''}` : '';
+  $('delete-agent').disabled=!!fleet.running || !!task.attempt || !!task.terminal_requested || !!task.terminal_open;
+  $('delete-agent').title=$('delete-agent').disabled ? 'Stop scheduling, finish the worker turn and close its terminal before deleting.' : 'Permanently delete this agent and clean up its worktree.';
   $('remove-agent').disabled = task.enabled === false || !!task.terminal_requested;
   $('task-meta').textContent = `Agent ID: ${task.id}\n${task.branch}\n${task.worktree}`;
   $('task-meta').style.whiteSpace = 'pre-wrap';
@@ -595,7 +599,7 @@ function applySupervisor(supervisor) {
 }
 function renderArchived(tasks) {
   $('removed-agents').hidden = tasks.length === 0;
-  $('archived-agents').innerHTML = tasks.length ? tasks.map(t=>`<button class="button quiet" data-restore="${escapeHTML(t.id)}">↶ ${escapeHTML(agentName(t))}</button><button class="button small danger" data-delete="${escapeHTML(t.id)}">Delete &amp; clean up ${escapeHTML(agentName(t))}</button>`).join('') : '<small class="muted">None</small>';
+  $('archived-agents').innerHTML = tasks.length ? tasks.map(t=>`<button class="button quiet" data-restore="${escapeHTML(t.id)}">↶ ${escapeHTML(agentName(t))}</button><button class="button small danger" data-delete="${escapeHTML(t.id)}" ${currentFleet()?.running || t.attempt || t.terminal_requested || t.terminal_open ? 'disabled title="Stop scheduling and finish the worker turn before deleting."' : ''}>Delete &amp; clean up ${escapeHTML(agentName(t))}</button>`).join('') : '<small class="muted">None</small>';
   $('archived-agents').querySelectorAll('[data-delete]').forEach(button => button.onclick = () => deleteAgent(button.dataset.delete));
   $('archived-agents').querySelectorAll('[data-restore]').forEach(button=>button.onclick=async()=>{
     try { await api(`/supervisor/agents/${encodeURIComponent(button.dataset.restore)}/restore`,{}); await refresh(); toast('Agent restored.'); } catch(e) { toast(e.message,true); }

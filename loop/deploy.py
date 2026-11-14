@@ -6,6 +6,8 @@ from functools import lru_cache
 import http.cookiejar
 import json
 import os
+import re
+import shlex
 from pathlib import Path
 import signal
 import shutil
@@ -79,6 +81,24 @@ def public_status(repo):
             if last['stage'] not in ('complete', 'failed'):
                 last = {**last, 'stage': 'failed', 'error': 'Deployment process ended before completion; inspect its log and retry.'}
     return {'checkout': target['checkout'], 'branch': target['branch'], 'url': target['url'], 'job': last}
+
+
+def failure_message(path, error):
+    if not isinstance(error, subprocess.CalledProcessError):
+        return str(error)
+    log=Path(path).with_suffix('.log')
+    if log.exists():
+        with log.open('rb') as stream:
+            stream.seek(0,2);size=stream.tell();stream.seek(max(0,size-65536))
+            text=stream.read().decode(errors='replace')
+        text=re.sub(r'\x1b\[[0-9;]*m','',text)
+        names=re.findall(r'^\s+\d+\) (.+)$',text,re.MULTILINE)
+        if names:
+            return 'Browser tests failed: '+('; '.join(name.split(' › ',1)[-1] for name in names))[:500]
+        names=re.findall(r'^(?:FAIL|ERROR): (.+)$',text,re.MULTILINE)
+        if names:
+            return 'Validation failed: '+('; '.join(names))[:500]
+    return f'Validation command failed (exit {error.returncode}). Open the deployment log for details.'
 
 
 def snapshot(source, ident, directory):
@@ -299,12 +319,15 @@ def execute(path, *, host_factory=Host):
             raise RuntimeError('The running server did not report the deployed commit')
         stage('complete', error=None)
     except Exception as exc:
+        detail=failure_message(path,exc)
+        if isinstance(exc,subprocess.CalledProcessError):
+            job['failed_check']=shlex.join(exc.cmd)
         if stopped or getattr(host, 'stopped', False):
             try:
                 host = host_factory.start(target)
                 asyncio.run(host.restore(saved))
             except Exception as recovery_error:
-                stage('failed', error=str(exc), recovery_error=str(recovery_error)); return False
+                stage('failed', error=detail, recovery_error=str(recovery_error)); return False
         # A stopped scheduler is restored even if publication/restart failed beforehand.
         elif saved and saved['running'] and host:
             try:
@@ -312,7 +335,7 @@ def execute(path, *, host_factory=Host):
                     host.call('/supervisor/resume', {})
             except Exception:
                 pass
-        stage('failed', error=str(exc))
+        stage('failed', error=detail)
         return False
     finally:
         if worktree.exists():
