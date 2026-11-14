@@ -377,15 +377,22 @@ $('note-form').onsubmit = async event => {
 function selectTab(tab) {
   activeTab = tab;localStorage.setItem('loop-tab',tab);
   if(selectedTask) {localStorage.setItem('loop-task',selectedTask);const url=new URL(location.href);url.searchParams.set('agent',selectedTask);url.searchParams.set('tab',tab);history.replaceState(null,'',url.href);}
-  document.querySelectorAll('[data-tab]').forEach(b => { b.classList.toggle('active', b.dataset.tab === tab); b.setAttribute('aria-selected', String(b.dataset.tab === tab)); });
+  document.querySelectorAll('[data-tab]').forEach(b => { b.classList.toggle('active', b.dataset.tab === tab); b.setAttribute('aria-selected', String(b.dataset.tab === tab)); b.tabIndex = b.dataset.tab === tab ? 0 : -1; });
   for (const name of ['native','activity','terminal','usage','decisions']) $(name+'-panel').hidden = name !== tab;
   if (['activity','terminal'].includes(tab)) loadLogs();
   $('note-form').hidden = tab === 'native';
   if (['native','terminal'].includes(tab)) requestAnimationFrame(() => fit?.fit());
   if(tab === 'native' && currentTask()) render();
 }
-$('view-worker-terminal').onclick = () => { selectTab('terminal'); $('terminal-panel').scrollIntoView({block:'nearest',behavior:'smooth'}); };
-document.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => selectTab(b.dataset.tab));
+document.querySelectorAll('[data-tab]').forEach(b => {
+  b.onclick = () => selectTab(b.dataset.tab);
+  b.onkeydown = event => {
+    const tabs = [...document.querySelectorAll('[data-tab]')], index = tabs.indexOf(b);
+    const next = {ArrowRight: (index + 1) % tabs.length, ArrowLeft: (index + tabs.length - 1) % tabs.length, Home: 0, End: tabs.length - 1}[event.key];
+    if (next === undefined) return;
+    event.preventDefault(); tabs[next].focus(); selectTab(tabs[next].dataset.tab);
+  };
+});
 function disconnectTerminal() {
   if (socket) { socket.onopen = null; socket.onclose = null; socket.onmessage = null; socket.onerror = null; socket.close(); socket = null; }
   terminal?.dispose(); terminal = null; fit = null; terminalKey = null; terminalMode=null;
@@ -537,6 +544,7 @@ function applySupervisor(supervisor) {
   $('connection').textContent = 'Live stream connected';
 }
 function renderArchived(tasks) {
+  $('removed-agents').hidden = tasks.length === 0;
   $('archived-agents').innerHTML = tasks.length ? tasks.map(t=>`<button class="button quiet" data-restore="${escapeHTML(t.id)}">↶ ${escapeHTML(t.id)}</button>`).join('') : '<small class="muted">None</small>';
   $('archived-agents').querySelectorAll('[data-restore]').forEach(button=>button.onclick=async()=>{
     try { await api(`/supervisor/agents/${encodeURIComponent(button.dataset.restore)}/restore`,{}); await refresh(); toast('Agent restored.'); } catch(e) { toast(e.message,true); }

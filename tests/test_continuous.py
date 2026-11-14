@@ -174,10 +174,25 @@ class ContinuousTests(ContinuousBase):
         leader = subprocess.Popen(["sleep", "30"], start_new_session=True)
         self.addCleanup(leader.wait)
         self.addCleanup(leader.kill)
-        record = {"provider_pid": leader.pid, "provider_start_identity": process_identity(leader.pid)}
+        identity = process_identity(leader.pid)
+        if not identity:
+            self.skipTest("Host does not expose process start identities through ps")
+        record = {"provider_pid": leader.pid, "provider_start_identity": identity}
         self.assertTrue(self.run._group_present(record))
         record["provider_start_identity"] = "Thu Jan  1 00:00:00 1970"
         self.assertFalse(self.run._group_present(record))
+
+    def test_group_identity_mismatch_and_unavailable_identity(self):
+        record = {"provider_pid": 12345, "provider_start_identity": "original-start"}
+        with mock.patch("loop.continuous.process_identity", return_value="different-start"), \
+                mock.patch("loop.continuous.os.killpg") as killpg:
+            self.assertFalse(self.run._group_present(record))
+            killpg.assert_not_called()
+        # Missing host metadata must keep the ownership check conservative.
+        with mock.patch("loop.continuous.process_identity", return_value=""), \
+                mock.patch("loop.continuous.os.killpg") as killpg:
+            self.assertTrue(self.run._group_present(record))
+            killpg.assert_called_once_with(12345, 0)
 
     def test_symlink_escaping_the_worktree_is_out_of_scope(self):
         os.symlink("/etc", self.run.worktree / "escape")
