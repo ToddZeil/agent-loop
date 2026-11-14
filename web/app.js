@@ -44,7 +44,11 @@ function modelPicker(input, provider, value = input.value) {
     const select = document.createElement('select'); select.dataset.modelPicker = '';
     const custom = document.createElement('input'); custom.placeholder = 'Exact model ID';
     custom.setAttribute('aria-label', 'Custom model ID');
-    input.after(select, custom);
+    const controls=document.createElement('div'); controls.className='model-picker-controls';
+    const refresh=document.createElement('button'); refresh.type='button'; refresh.className='model-refresh';
+    refresh.textContent='↻'; refresh.title='Refresh model catalogue'; refresh.setAttribute('aria-label','Refresh models');
+    refresh.onclick=async()=>{refresh.disabled=true;try{await loadModels();toast('Model catalogue refreshed.');}catch(e){toast(e.message,true);}finally{refresh.disabled=false;}};
+    controls.append(select,refresh); input.after(controls,custom);
     input._picker = select; select._input = input; select._custom = custom;
     select.onchange = () => {
       custom.hidden = select.value !== '__custom';
@@ -58,7 +62,7 @@ function modelPicker(input, provider, value = input.value) {
   select._provider = provider;
   const models = modelCatalog[provider]?.models || [];
   select.innerHTML = '<option value="">Provider default</option>' + models.map(m =>
-    `<option value="${escapeHTML(m.id)}">${escapeHTML(m.label)} · ${escapeHTML(m.id)}${m.custom ? ' (saved custom)' : ''}</option>`
+    `<option value="${escapeHTML(m.id)}">${escapeHTML(m.label)} · ${escapeHTML(m.id)}${m.custom ? ' (saved custom)' : m.previously_seen ? ' (previously seen)' : ''}</option>`
   ).join('') + '<option value="__custom">Custom model ID…</option>';
   const known = models.some(m => m.id === value);
   select.value = !value || known ? value : '__custom';

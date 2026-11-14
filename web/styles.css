@@ -197,3 +197,10 @@ dialog label { display: block; font-size: 11px; color: #a1b39e; margin-top: 16px
 .conversation-text code { padding:2px 5px; border-radius:4px; background:#304030; color:#d1e7c4; font:11px/1.7 ui-monospace,monospace; }
 .conversation-text .message-code { margin:10px 0; padding:14px; border:1px solid #344732; border-radius:8px; background:#101810; color:#b9d1ad; white-space:pre-wrap; overflow:auto; font:11px/1.75 ui-monospace,monospace; }
 .conversation-text strong { font-weight:650; color:#eef5e9; }
+
+.model-picker-controls { display:flex; gap:5px; align-items:stretch; margin-top:6px; }
+.model-picker-controls select { flex:1; min-width:0; width:0; margin:0 !important; }
+.model-refresh { flex-shrink:0; width:31px; padding:0; border:1px solid #3a4840; border-radius:6px; background:#1f2b21; color:#b3d59c; font-size:19px; }
+.model-refresh:hover:not(:disabled) { background:#324535; }
+.agent-model-settings { flex-shrink:0; }
+.agent-settings { flex-shrink:1; min-height:34px; }
