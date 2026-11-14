@@ -2,6 +2,8 @@ const {test,expect} = require('@playwright/test');
 const path = require('node:path');
 async function optionalSettings(page) { if(await page.locator('#optional-settings').getAttribute('open') === null) await page.locator('#optional-settings > summary').click(); }
 
+async function agentSettings(page) { if(await page.locator('#agent-settings').getAttribute('open') === null) await page.locator('#agent-settings > summary').click(); }
+
 test('one supervisor: add an agent, use a real terminal, send direction, and complete',async ({page,request}) => {
   const errors=[];page.on('pageerror',error=>errors.push(error.message));
   const fixture=await (await request.get('/test-fixture')).json();
@@ -13,10 +15,11 @@ test('one supervisor: add an agent, use a real terminal, send direction, and com
   await page.getByLabel('Goal',{exact:true}).fill('Set app.py value to 2.');
   await page.getByLabel('Verification command (optional)',{exact:true}).fill(fixture.acceptance);
   await page.getByRole('button',{name:'Add agents',exact:true}).click();
-  await expect(page.locator('#title')).toHaveText('Your local supervisor.');
+  await expect(page.locator('#title')).toHaveText('Agent workspace');
   await expect(page.locator('#stat-total')).toHaveText('1');
   await expect(page.locator('#task-status')).toHaveText('ready');
-  await page.getByRole('tab',{name:'Terminal',exact:true}).click();
+  await page.getByRole('tab',{name:'Conversation',exact:true}).click();
+  await page.locator('#shell-settings > summary').click();
   await page.getByRole('button',{name:'Open terminal',exact:true}).click();
   await expect(page.locator('#terminal-state')).toContainText('Connected');
   await page.locator('.xterm-helper-textarea').focus();
@@ -37,11 +40,12 @@ test('one supervisor: add an agent, use a real terminal, send direction, and com
   await expect(page.locator('#manager-state')).toContainText('running');
   await expect(page.locator('#task-status')).toHaveText('complete',{timeout:20000});
   await expect(page.locator('#stat-done')).toHaveText('1');
-  await page.getByRole('tab',{name:'Activity',exact:true}).click();
+  await page.getByRole('tab',{name:'Run log',exact:true}).click();
   await expect(page.locator('#activity')).toContainText('Updated app.py');
   await expect(page.locator('#manager-state')).toContainText('running');
   await page.locator('#view-worker-terminal').click();
   await expect(page.locator('#worker-terminal-output')).toContainText('Updated app.py');
+  await expect(page.locator('#worker-terminal-output .conversation-text strong').first()).toHaveText('Updated app.py');
   const command = page.locator('#worker-terminal-output .command-card').filter({hasText:'python3 -c check_value'}).first();
   await command.locator('summary').click();
   await expect(command.locator('pre')).toBeVisible();
@@ -96,12 +100,14 @@ test('scan repositories, choose one, persist subagent toggle, and remove/restore
   await page.locator('[data-field="allow-subagents"]').check();
   await page.getByRole('button',{name:'Add agents',exact:true}).click();
   await expect(page.locator('#task-title')).toHaveText('selected-repo');
+  await agentSettings(page);
   await expect(page.locator('#allow-subagents')).toBeChecked();
   await expect(page.locator('.worker-policy')).toContainText('All project files');
   await page.locator('#allow-subagents').uncheck();
   await expect(page.locator('#toast')).toContainText('Subagent setting saved');
   await page.reload();
   await page.locator('[data-task="selected-repo"]').click();
+  await agentSettings(page);
   await expect(page.locator('#allow-subagents')).not.toBeChecked();
   await page.locator('#remove-agent').click();
   await expect(page.locator('[data-restore="selected-repo"]')).toBeVisible({timeout:15000});
@@ -159,6 +165,7 @@ test('agent and supervisor token reports update live and survive refresh',async 
   await expect(page.locator('#agent-usage-output')).toHaveText('16');
   await expect(page.locator('#agent-usage-cached')).toHaveText('8');
   await expect(page.locator('#usage-panel')).toContainText('Supervisor assistance: 130');
+  await page.locator('#token-details > summary').click();
   await page.getByText('Supervisor usage by model',{exact:true}).click();
   await expect(page.locator('#supervisor-usage-models')).toContainText('130');
   await page.screenshot({path:path.resolve(__dirname,'../../.agent-loop/web-tokens.png'),fullPage:true});
@@ -212,6 +219,7 @@ test('cached exact model IDs are selectable for workers and supervisor; existing
   await expect(page.locator('#supervisor-dialog [data-model-picker] option[value="fixture-model"]')).toBeAttached();
   await page.locator('#supervisor-dialog [data-close]').click();
   if (await page.locator('#stop').isEnabled()) await page.locator('#stop').click();
+  await agentSettings(page);
   await expect(page.locator('#save-agent-model')).toBeEnabled();
   await page.locator('.agent-model-settings [data-model-picker]').selectOption('fixture-model');
   await page.locator('#save-agent-model').click();
@@ -271,6 +279,7 @@ test('effort is selectable for new and existing agents and supervisor; parallel 
   await page.getByLabel('Repository root',{exact:true}).fill(fixture.repo);
   await page.getByLabel('Goal',{exact:true}).fill('Verify effort controls.');
   await page.getByRole('button',{name:'Add agents',exact:true}).click();
+  await agentSettings(page);
   await expect(page.locator('#agent-effort')).toHaveValue('xhigh');
   await page.locator('#agent-effort').selectOption('low');
   await page.locator('#save-agent-effort').click();
@@ -313,4 +322,28 @@ test('open tabs report their UI revision and offer safe reload when files change
   await page.getByRole('button',{name:'Reload interface',exact:true}).click();
   await expect(page.getByLabel('Give this worker direction',{exact:true})).toHaveValue('Keep this unsent draft.');
   await expect(page.locator('#ui-update')).toBeHidden();
+});
+
+
+test('desktop opens directly to a readable conversation with its composer in view',async ({page,request})=>{
+  const fixture=await (await request.get('/test-fixture')).json();
+  await page.goto('/');
+  await page.locator('#new-fleet').click();
+  await page.getByLabel('Repository root',{exact:true}).fill(fixture.repo);
+  await page.getByLabel('Goal',{exact:true}).fill('Ready for design review.');
+  await page.getByRole('button',{name:'Add agents',exact:true}).click();
+  await expect(page.locator('#create-dialog')).toBeHidden();
+  await expect(page.locator('#worker-terminal-output')).toContainText('Ready for design review.');
+  await expect(page.getByRole('tab',{name:'Conversation',exact:true})).toHaveAttribute('aria-selected','true');
+  expect(await page.locator('#agent-settings').getAttribute('open')).toBeNull();
+  expect(await page.locator('#token-details').getAttribute('open')).toBeNull();
+  const composer=await page.locator('#note-form').boundingBox();
+  expect(composer.y+composer.height).toBeLessThanOrEqual(1000);
+  await page.getByLabel('Find agents',{exact:true}).fill('Ready for design review');
+  await expect(page.locator('.worker-card')).toHaveCount(1);
+  await page.screenshot({path:path.resolve(__dirname,'../../.agent-loop/web-redesign-desktop.png'),fullPage:true});
+  await page.setViewportSize({width:390,height:844});
+  await expect(page.locator('#worker-terminal-output')).toBeVisible();
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth)).toBe(false);
+  await page.screenshot({path:path.resolve(__dirname,'../../.agent-loop/web-redesign-mobile.png'),fullPage:true});
 });

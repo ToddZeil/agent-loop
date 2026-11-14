@@ -97,7 +97,7 @@ function render() {
   $('fleet-count').textContent = fleets.length;
   $('fleet-list').innerHTML = fleets.map(f => `<button class="fleet-link ${f.id === selectedFleet ? 'active' : ''}" data-fleet="${escapeHTML(f.id)}"><span>${escapeHTML(f.name)}</span><small>${f.tasks.length}</small></button>`).join('');
   $('fleet-list').querySelectorAll('button').forEach(b => b.onclick = () => chooseFleet(b.dataset.fleet));
-  $('title').textContent = 'Your local supervisor.';
+  $('title').textContent = 'Agent workspace';
   $('fleet-label').textContent = 'SUPERVISOR';
   $('subtitle').textContent = fleet?.error || (fleet ? `${tasks.length} ${tasks.length === 1 ? 'agent' : 'agents'} · one persistent supervisor` : 'Add agents whenever you need another pair of hands.');
   $('subtitle').title = fleet?.home || '';
@@ -116,11 +116,13 @@ function render() {
     $('keeper-status').textContent = fleet.keeper?.enabled ? `Optional keeper: ${fleet.keeper.model}` : 'Local keeper: off (deterministic recovery)';
     $('supervisor-label').textContent = `Supervisor: ${fleet.supervisor?.provider || 'unknown'} / ${fleet.supervisor?.model || 'default model'}`;
   }
-  $('workers').innerHTML = tasks.map(t => {
+  const query = $('worker-search').value.trim().toLowerCase();
+  const visibleTasks = tasks.filter(t => !query || `${t.id} ${t.repo} ${t.goal}`.toLowerCase().includes(query));
+  $('workers').innerHTML = visibleTasks.map(t => {
     const hold = Object.values(t.provider_holds || {}).filter(h => h.until > Date.now()/1000).sort((a,b) => a.until-b.until)[0];
     const wait = t.state === 'waiting' ? `<div class="worker-wait">${escapeHTML(t.wait_reason?.slice(0,180))}${hold ? ` · reset in <span data-until="${hold.until}">${countdown(hold.until)}</span>` : t.retry_at ? ` · retry in <span data-until="${t.retry_at}">${countdown(t.retry_at)}</span>` : ''}</div>` : '';
-    return `<button class="worker-card ${t.id === selectedTask ? 'selected' : ''}" data-task="${escapeHTML(t.id)}"><div class="worker-top"><strong>${escapeHTML(t.id)}</strong>${pill(t.signal || t.state)}</div><span class="repo">↳ ${escapeHTML(t.repo)}</span><div class="goal">${escapeHTML(t.goal || t.next_action)}</div>${wait}<div class="worker-bottom"><span class="model">${escapeHTML(t.provider)} / ${escapeHTML(t.model || 'default')}</span><span>${t.turns} turns · ${tokenNumber(t.usage ? t.usage.agent.total_tokens : Object.values(t.tokens || {}).reduce((a,b) => a+b,0))} tokens</span></div></button>`;
-  }).join('');
+    return `<button class="worker-card ${t.id === selectedTask ? 'selected' : ''}" data-task="${escapeHTML(t.id)}"><div class="worker-top"><strong>${escapeHTML(t.id)}</strong>${pill(t.signal || t.state)}</div><span class="repo" title="${escapeHTML(t.repo)}">${escapeHTML(t.repo.split(/[\\/]/).filter(Boolean).pop())}</span><div class="goal">${escapeHTML(t.goal || t.next_action)}</div>${wait}<div class="worker-bottom"><span class="model">${escapeHTML(t.provider)} / ${escapeHTML(t.model || 'default')}</span><span>${t.turns} turns · ${tokenNumber(t.usage ? t.usage.agent.total_tokens : Object.values(t.tokens || {}).reduce((a,b) => a+b,0))} tokens</span></div></button>`;
+  }).join('') || '<p class="list-empty">No matching agents.</p>';
   $('workers').querySelectorAll('button').forEach(b => b.onclick = () => chooseTask(b.dataset.task));
   const task = currentTask();
   if (!task) return;
@@ -248,10 +250,16 @@ function conversationItems(output) {
   }
   return items;
 }
+function formatMessage(text) {
+  return String(text).split(/(```[\s\S]*?(?:```|$))/g).map(part => {
+    if(part.startsWith('```')) return `<pre class="message-code">${escapeHTML(part.replace(/^```[^\n]*\n?/,'').replace(/```$/,''))}</pre>`;
+    return escapeHTML(part).replace(/`([^`\n]+)`/g,'<code>$1</code>').replace(/\*\*([^*\n]+)\*\*/g,'<strong>$1</strong>').replace(/^- \[x\] /gm,'✓ ').replace(/^- \[ \] /gm,'○ ');
+  }).join('');
+}
 function renderConversation(data) {
   const panel=$('worker-terminal-output');
   const opened=new Set([...panel.querySelectorAll('details[open]')].map(el=>el.dataset.key));
-  const message=(role,text,status='')=>`<article class="conversation-entry ${role === 'You' ? 'user-message' : ''}"><div class="conversation-role">${escapeHTML(role)}${status ? `<span>${escapeHTML(status)}</span>` : ''}</div><div class="conversation-text">${escapeHTML(text)}</div></article>`;
+  const message=(role,text,status='')=>`<article class="conversation-entry ${role === 'You' ? 'user-message' : ''}"><div class="conversation-role">${escapeHTML(role)}${status ? `<span>${escapeHTML(status)}</span>` : ''}</div><div class="conversation-text">${formatMessage(text)}</div></article>`;
   const entries=(data.notes || []).map(note=>({at:note.at,html:message('You',note.text,note.delivery)}));
   for(const turn of data.turns || [{id:'latest',at:0,output:data.output}]) {
     let html='';
@@ -285,6 +293,7 @@ async function fleetAction(action) {
   try { await api(`/supervisor/${action}`, {}); toast(action === 'stop' ? 'Stop requested. Active workers finish their current turn.' : 'Supervisor started. Agents can join while it runs.'); await refresh(); }
   catch(e) { toast(e.message, true); render(); }
 }
+$('worker-search').oninput = () => render();
 $('resume').onclick = () => fleetAction('resume'); $('stop').onclick = () => fleetAction('stop');
 $('allow-subagents').onchange = async event => {
   const checkbox = event.currentTarget, value = checkbox.checked;
@@ -303,6 +312,7 @@ $('save-agent-effort').onclick = async () => {
   try { await api(taskURL()+'/settings',{worker_effort:$('agent-effort').value}); await refresh(); toast('Effort saved for the next worker turn.'); }
   catch(e) { toast(e.message,true); }
 };
+$('note').onkeydown = event => { if(event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); if(!$('note-form').querySelector('button').disabled) $('note-form').requestSubmit($('note-form').querySelector('button')); } };
 $('note-form').onsubmit = async event => {
   event.preventDefault(); const button = event.submitter; button.disabled = true;
   try {
@@ -359,7 +369,7 @@ function addTask() {
   const row = document.createElement('section'); row.className = 'task-fields'; row.dataset.defaultId = `task-${taskNumber}`;
   row.innerHTML = `<div class="task-field-head"><span>AGENT ${String(taskNumber).padStart(2,'0')}</span><button type="button" class="icon-button remove-task" aria-label="Remove agent form">×</button></div><label>Saved project<select data-field="project" aria-label="Saved project"><option value="">Choose a saved repository, or enter a path…</option></select></label><label data-manual-repo>Repository root<input data-field="repo" placeholder="/Users/you/projects/app" required></label><label>Goal<textarea data-field="goal" rows="3" placeholder="What would you like this agent to do?" required></textarea></label><div class="form-row"><label>Worker provider<select data-field="provider"><option>codex</option><option>claude</option><option>antigravity</option><option>muse</option></select></label><label>Model<input data-field="model" placeholder="Provider default"></label></div><label>Worker effort<select data-field="effort" aria-label="Worker effort"><option>medium</option></select></label><label class="subagent-option"><input type="checkbox" data-field="allow-subagents"> Allow subagents</label><small class="muted">All project files · supervisor reviews the result</small>`;
   const options = document.createElement('section'); options.className = 'task-options'; row._options = options;
-  options.innerHTML = `<h4>Agent ${String(taskNumber).padStart(2,'0')}</h4><label>Agent ID<input data-field="id" value="${row.dataset.defaultId}" pattern="[a-z0-9][a-z0-9-]{0,60}" placeholder="Generated automatically"></label><label>Verification command (optional)<input data-field="check" placeholder="For example: npm test"></label><small class="muted">Leave empty to use supervisor review.</small><div class="form-row"><label>Fallback provider<select data-field="fallback"><option value="">Wait for quota reset</option><option>codex</option><option>claude</option><option>antigravity</option><option>muse</option></select></label><label>Fallback model<input data-field="fallback-model" placeholder="Provider default"></label></div>`;
+  options.innerHTML = `<h4>Agent ${String(taskNumber).padStart(2,'0')}</h4><label>Agent ID<input data-field="id" value="${row.dataset.defaultId}" pattern="[a-z0-9](?:[a-z0-9]|-){0,60}" placeholder="Generated automatically"></label><label>Verification command (optional)<input data-field="check" placeholder="For example: npm test"></label><small class="muted">Leave empty to use supervisor review.</small><div class="form-row"><label>Fallback provider<select data-field="fallback"><option value="">Wait for quota reset</option><option>codex</option><option>claude</option><option>antigravity</option><option>muse</option></select></label><label>Fallback model<input data-field="fallback-model" placeholder="Provider default"></label></div>`;
   row.querySelector('.remove-task').onclick = () => { if ($('task-fields').children.length > 1) { options.remove(); row.remove(); } else toast('Add at least one agent.', true); };
   $('task-fields').append(row); $('task-options').append(options);
   row.querySelector('[data-field=project]').onchange = event => {

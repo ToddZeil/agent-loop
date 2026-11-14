@@ -80,13 +80,13 @@ for those CLIs is not implemented. Choose **Custom model ID…** to save another
 A saved custom ID is not a guarantee of account access.
 
 Unsupported-model errors block for correction rather than retrying on a quota timer.
-To correct an existing agent, stop scheduling, let its current turn finish, choose its
-**Agent model**, and click **Save model**. Start the supervisor again to retry. This clears
+To correct an existing agent, stop scheduling, let its current turn finish, open
+**Agent settings**, and choose its **Agent model**, and click **Save model**. Start the supervisor again to retry. This clears
 the old worker session and preserves the worktree, goal, and usage history.
 
 ## Effort settings
 
-**Worker effort** is available in Add agents and the selected agent's detail panel.
+**Worker effort** is available in Add agents and the selected agent's **Agent settings**.
 **Save effort** applies changes to the next worker turn without discarding its worktree
 or session. **Supervisor effort** is in Supervisor settings and applies to both questions
 and objective reviews. The model catalogue supplies Codex's advertised effort levels;
@@ -165,7 +165,7 @@ Messages do not inject keystrokes into an active provider process.
 
 ## Local terminals and controls
 
-Select an agent and click **View terminal**, or open its **Terminal** tab. **Conversation**
+Select an agent to open its **Conversation** tab. **Conversation**
 shows messages and expandable commands with their output while the agent runs, and retains the six most recent
 turns after completion. Sent messages appear with queued/delivered status. Direct links support `/?agent=task-3&tab=terminal`. On smaller
 screens, selecting an agent scrolls its detail panel into view.
@@ -206,7 +206,7 @@ using a custom test-browser cache.
 
 ## Token monitoring
 
-The **Token monitoring** section shows cumulative reported usage for all agents and the
+Expand **Usage & tokens** to see cumulative reported usage for all agents and the
 shared supervisor, with input, output, and cached-input counts. Expand **Supervisor usage
 by model** for its provider/model breakdown. Each agent's **Tokens** tab shows its own
 breakdown, model history, last reported context estimate, and worker budget when configured.
@@ -251,3 +251,8 @@ those files change, existing tabs receive an **Updated interface available** not
 **Reload interface** preserves the selected worker and any unsent worker-message draft.
 The app does not reload an active tab automatically. Worktree previews on another port
 still serve their own checkout; a revision notice does not merge worktree changes.
+
+The workspace opens directly to the selected worker's conversation. Global counts stay
+compact; token breakdowns, agent settings, and the separate worktree shell are expandable.
+Use **Find an agent** to filter a long worker list. The message composer remains in view on
+desktop, and Cmd+Enter (Ctrl+Enter on other systems) sends the next-turn message.

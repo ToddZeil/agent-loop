@@ -45,7 +45,7 @@ elif 'ASK_TOKEN_QUESTION' in sys.argv[-1] and 'resume' not in sys.argv:
  usage={'input_tokens':12,'cached_input_tokens':4,'output_tokens':8}
 else:
  Path('app.py').write_text('value = 2\\n')
- text='Updated app.py and verified value 2.'
+ text='**Updated app.py** and verified value 2.'
  usage={'input_tokens':12,'cached_input_tokens':4,'output_tokens':8}
 print(json.dumps({'type':'thread.started','thread_id':'browser-supervisor' if supervisor else 'browser-worker'}))
 if not supervisor:
