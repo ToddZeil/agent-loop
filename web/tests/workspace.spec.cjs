@@ -143,17 +143,15 @@ test('delete and clean up current and archived agents, with cancellation', async
   }, fixture.repo);
   await page.locator('[data-task="delete-ui"]').click();
   await agentSettings(page);
-  page.once('dialog', dialog => dialog.dismiss());
   await page.locator('#delete-agent').click();
+  await page.locator('#confirm-cancel').click();
   await expect(page.locator('[data-task="delete-ui"]')).toBeVisible();
   await page.locator('#remove-agent').click();
   await workspaceSettings(page);
   await expect(page.locator('[data-delete="delete-ui"]')).toBeVisible();
-  page.once('dialog', async dialog => {
-    expect(dialog.message()).toContain('cannot be undone');
-    await dialog.accept();
-  });
   await page.locator('[data-delete="delete-ui"]').click();
+  await expect(page.locator('#confirm-message')).toContainText('cannot be undone');
+  await page.locator('#confirm-ok').click();
   await expect(page.locator('[data-delete="delete-ui"]')).toHaveCount(0);
   await expect(page.locator('#toast')).toContainText('Agent deleted');
   await page.reload();
@@ -165,8 +163,8 @@ test('delete and clean up current and archived agents, with cancellation', async
   }, fixture.repo);
   await page.locator('[data-task="delete-ui"]').click();
   await agentSettings(page);
-  page.once('dialog', dialog => dialog.accept());
   await page.locator('#delete-agent').click();
+  await page.locator('#confirm-ok').click();
   await expect(page.locator('[data-task="delete-ui"]')).toHaveCount(0);
   await expect(page.locator('#toast')).toContainText('Agent deleted');
   if(wasRunning) {
@@ -193,11 +191,12 @@ test('tile options delete a working agent while the supervisor and other agents 
   await card.locator('summary').click();
   await expect(page.locator('#task-title')).toHaveText('menu-keep');
   await expect(card.getByRole('button', {name:'Delete & clean up',exact:true})).toBeEnabled();
-  page.once('dialog', dialog => dialog.dismiss());
   await card.getByRole('button', {name:'Delete & clean up',exact:true}).click();
+  await page.locator('#confirm-cancel').click();
   await expect(card).toBeVisible();
-  page.once('dialog', dialog => dialog.accept());
+  await card.locator('summary').click();
   await card.getByRole('button', {name:'Delete & clean up',exact:true}).click();
+  await page.locator('#confirm-ok').click();
   await expect(card).toContainText('Deletion queued');
   await page.reload();
   await expect(card).toHaveCount(0, {timeout:20000});

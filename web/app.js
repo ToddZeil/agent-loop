@@ -623,8 +623,20 @@ function renderArchived(tasks) {
     try { await api(`/supervisor/agents/${encodeURIComponent(button.dataset.restore)}/restore`,{}); await refresh(); toast('Agent restored.'); } catch(e) { toast(e.message,true); }
   });
 }
+// In-page confirmation: native confirm() is blocked or invisible in some embedded browsers.
+function confirmDialog(title, message, okLabel) {
+  const dialog = $('confirm-dialog');
+  $('confirm-title').textContent = title; $('confirm-message').textContent = message; $('confirm-ok').textContent = okLabel;
+  return new Promise(resolve => {
+    const finish = value => { dialog.removeEventListener('close', onClose); if (dialog.open) dialog.close(); resolve(value); };
+    const onClose = () => finish(false);
+    $('confirm-cancel').onclick = () => finish(false);
+    $('confirm-form').onsubmit = event => { event.preventDefault(); finish(true); };
+    dialog.addEventListener('close', onClose); dialog.showModal(); $('confirm-cancel').focus();
+  });
+}
 async function deleteAgent(id) {
-  if (!window.confirm(`Permanently delete agent "${id}"? This discards all uncommitted files and commits on its worker branch, its worktree, and saved conversation/run history. This cannot be undone. Its open terminal will close; any current worker turn will finish before cleanup. Other agents keep running. The project repository is kept.`)) return;
+  if (!await confirmDialog(`Delete agent "${id}"?`, `This discards all uncommitted files and commits on its worker branch, its worktree, and saved conversation/run history. This cannot be undone. Its open terminal will close; any current worker turn will finish before cleanup. Other agents keep running. The project repository is kept.`, 'Delete & clean up')) return;
   try {
     const result = await api(`/supervisor/agents/${encodeURIComponent(id)}/delete`, {confirm:true});
     await refresh(); if(result.cleanup_error) { toast('Cleanup failed: '+result.cleanup_error,true); return; }
