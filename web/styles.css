@@ -348,3 +348,65 @@ h1 { font-size: 22px; margin: 0; }
 .workspace-bar { padding: 10px 28px; }
 .brand { font-size: 24px; }
 .brand-icon { width: 28px; height: 28px; font-size: 24px; }
+
+/* UX pass 1: legible type floor (no text under 11px), calmer contrast, touch-friendly targets. */
+.eyebrow, .stat-label, .nav-heading, .sidebar-label, .local, .stats .stat-label, .worker-bottom, .conversation-role span,
+.command-status, .conversation-turn-status, .model-picker-status, .agent-model-settings small, .worker-policy small,
+.shell-settings>summary .muted, .task-field-head, .native-toolbar small, .sidebar-bottom small, .usage-meta,
+.usage-table td small, .project-shortcut, .project-row code, .agent-settings>summary .muted, .token-caption, .token-split { font-size: 11px; }
+.worker-card .repo { font-size: 11px; color: var(--muted); }
+.worker-card .goal { font-size: 12.5px; }
+.muted { color: #a3b3a9; }
+[data-theme="light"] .muted { color: var(--muted); }
+.stats>div { flex-wrap: wrap; }
+.stat-label { text-transform: uppercase; }
+.agent-card-menu summary { width: 34px; height: 34px; }
+.settings-dropdown > .button { padding: 11px 12px; }
+.button:focus-visible, .tab:focus-visible { outline-offset: 2px; }
+.toast-safe, #toast { pointer-events: none; }
+
+/* UX pass 2: primary composer clarity, selection cues and status affordances. */
+#note-form button[type=submit][data-empty="1"] { opacity: .55; }
+.note-form textarea { transition: height .1s; overflow-y: auto; }
+.note-form { box-shadow: 0 -8px 18px -14px #000; }
+.note-form>small { display: block; color: var(--muted); font-size: 11px; }
+.worker-card.selected .worker-top strong { color: var(--accent); }
+.worker-card:active { transform: translateY(1px); }
+.pill.working::before, .pill.verifying::before { content: ''; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: currentColor; animation: pulse 1.4s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .25; } }
+@media(prefers-reduced-motion:reduce) { .pill::before { animation: none !important; } }
+.conversation { scroll-behavior: smooth; }
+.stats>div:has(strong:not(:empty)) .stat-label { white-space: nowrap; }
+#stat-waiting:not(:empty) { font-variant-numeric: tabular-nums; }
+.workspace-bar { position: sticky; top: 0; z-index: 15; }
+.empty { margin-top: 8px; }
+.empty-icon { box-shadow: 0 0 0 6px #c4ef9a14; }
+@media(max-width:650px) { .note-form>small { display: none; } }
+
+/* Merged from sibling worktree: empty-state onboarding. */
+
+/* UX pass 1: calmer empty state, no dead controls before the first agent. */
+.no-agents .stats, .no-agents .token-monitor, .no-agents .agents-heading { display: none; }
+.empty-steps { display: flex; justify-content: center; flex-wrap: wrap; gap: 8px 22px; list-style: none; margin: 18px 0 8px; padding: 0; color: var(--muted); font-size: 12px; }
+.empty-steps b { display: inline-grid; place-items: center; width: 20px; height: 20px; margin-right: 6px; border-radius: 50%; background: var(--raised); color: var(--accent); font-size: 11px; }
+.empty p { max-width: 460px; margin-inline: auto; }
+
+/* UX pass 2: legibility. Raise the smallest type, unify tab styling, tighten the composer. */
+.stats .stat-label, .nav-heading, .worker-bottom, .conversation-role span, .conversation-turn-status, .command-status, .decision small, .note-form>label, .model-picker-status, .agent-model-settings label, .agent-model-settings small, .worker-policy small, .usage-meta, .token-split, .token-caption, .shell-settings>summary .muted, .agent-settings>summary .muted { font-size: 11px; }
+.task-meta, .pill, .terminal-help, .terminal-toolbar, .worker-card .repo, .shell-settings, .shell-settings>summary, #supervisor-label { font-size: 11px; }
+.pill { padding: 4px 9px; }
+.tab { font-size: 12px; padding: 12px 0; }
+.native-tab, [data-theme="light"] .native-tab { color: inherit; }
+.tab.active, .native-tab.active { color: var(--accent); }
+.tab:hover:not(.active) { color: var(--text); }
+.note-form>label { color: var(--muted); }
+.worker-card.selected { box-shadow: inset 3px 0 var(--accent); }
+.conversation-empty { text-align: center; padding: 48px 0; }
+.stats .stat-label { letter-spacing: .8px; }
+@media(max-width:650px) { .tab { min-height: 44px; } .worker-card .goal { font-size: 13px; } }
+.native-tab, [data-theme="light"] .native-tab { color: #91a48f; }
+[data-theme="light"] .native-tab { color: var(--muted); }
+.native-tab.active, [data-theme="light"] .native-tab.active { color: var(--accent); }
+.tabs { overflow-x: auto; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
+@media(max-width:650px) { #worker-filter { font-size: 14px; } }
