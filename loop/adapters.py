@@ -335,6 +335,10 @@ def continuing_worker_command(provider, prompt, model=None, effort=None,
             argv.insert(-1, session)
     elif provider == "claude":
         argv.remove("--no-session-persistence")
+        # JSON mode buffers the whole coding turn, leaving live conversations
+        # empty and hiding tool activity from the worker's idle timeout.
+        argv[argv.index("--output-format") + 1] = "stream-json"
+        argv.append("--verbose")
         if session:
             argv += ["--resume", session]
     elif provider == "antigravity" and session:
@@ -849,6 +853,10 @@ def parse(provider, code, out, err, now=None):
                     "input_tokens", "output_tokens", "total_tokens")):
                 usage = use
         else:
+            # Claude's stream also contains system, assistant, tool and quota
+            # events. Only the terminal result determines turn completion/usage.
+            if provider == "claude" and event.get("type") != "result":
+                continue
             response = event.get("result", event.get("response", response))
             usage = event.get("usage", usage)
             cost = event.get("total_cost_usd", cost)
