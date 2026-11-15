@@ -81,7 +81,7 @@ function modelPicker(input, provider, value = input.value) {
   select.disabled=waiting;
   select._status.textContent=waiting ? `Loading ${providerLabel} models…` : modelLoadError ? `Model refresh failed: ${modelLoadError}` :
     models.length ? `${models.length} model ${models.length===1 ? 'choice' : 'choices'} · open the dropdown to select` : 'No saved model list. Use provider default or enter a custom ID.';
-  select.innerHTML = `<option value="">${waiting ? 'Loading models…' : models.length ? `Provider default · ${models.length} choices` : 'Provider default'}</option>` + models.map(m =>
+  select.innerHTML = `<option value="">${waiting ? 'Loading models…' : models.length ? `Provider default · ${models.length} ${models.length===1?'model':'models'}` : 'Provider default'}</option>` + models.map(m =>
     `<option value="${escapeHTML(m.id)}">${escapeHTML(m.label)} · ${escapeHTML(m.id)}${m.custom ? ' (saved custom)' : m.previously_seen ? ' (previously seen)' : ''}</option>`
   ).join('') + '<option value="__custom">Custom model ID…</option>';
   const known = models.some(m => m.id === value);
@@ -135,13 +135,14 @@ function render() {
   $('stat-waiting').textContent = tasks.filter(t => ['waiting','blocked'].includes(t.state)).length;
   $('stat-done').textContent = tasks.filter(t => t.state === 'complete').length;
   renderTokenMonitor(fleet);
-  $('worker-count').textContent = String(tasks.length).padStart(2,'0');
+  $('worker-count').textContent = String(tasks.length);
+  document.body.classList.toggle('no-agents', tasks.length === 0);
   $('empty').hidden = tasks.length > 0; $('workspace').hidden = tasks.length === 0;
   $('fleet-actions').hidden = !fleet;
   if (fleet) {
     $('manager-state').textContent = fleet.running ? '● Manager running' : 'Manager stopped';
     $('manager-state').className = 'pill' + (fleet.running ? ' working' : '');
-    $('stop').disabled = !fleet.running; $('resume').disabled = fleet.running || allTasks.some(t => t.terminal_open && t.terminal_mode === 'shell');
+    $('stop').disabled = !fleet.running; $('resume').title = tasks.length ? '' : 'Add an agent first'; $('resume').disabled = !tasks.length || fleet.running || allTasks.some(t => t.terminal_open && t.terminal_mode === 'shell');
     $('keeper-status').textContent = fleet.keeper?.enabled ? `Optional keeper: ${fleet.keeper.model}` : 'Local keeper: off (deterministic recovery)';
     $('supervisor-label').textContent = `Supervisor: ${fleet.supervisor?.provider || 'unknown'} / ${fleet.supervisor?.model || 'default model'}`;
   }
@@ -759,3 +760,22 @@ document.addEventListener('keydown', event => {
   const menu = document.querySelector('.settings-menu');
   if (event.key === 'Escape' && menu.open) { menu.open = false; menu.querySelector('summary').focus(); }
 });
+
+// UX pass 1: dismiss popovers on outside click; menu closes after choosing an item.
+document.addEventListener('click', event => {
+  const menu = document.querySelector('.settings-menu');
+  if (menu?.open && (!menu.contains(event.target) || event.target.closest('.settings-dropdown button'))) menu.open = false;
+  document.querySelectorAll('.agent-card-menu[open]').forEach(m => { if (!m.contains(event.target)) m.open = false; });
+});
+// UX pass 2: Send stays disabled until there is direction to send; textarea grows with content.
+(function noteComposer() {
+  const note = $('note'), send = $('note-form').querySelector('button[type=submit]');
+  const sync = () => {
+    note.style.height = 'auto'; note.style.height = Math.min(note.scrollHeight, 150) + 'px';
+    send.dataset.empty = note.value.trim() ? '' : '1';
+  };
+  note.addEventListener('input', sync);
+  $('note-form').addEventListener('submit', event => { if (!note.value.trim()) { event.stopImmediatePropagation(); event.preventDefault(); note.focus(); } }, true);
+  new MutationObserver(sync).observe(note, {attributes: true, attributeFilter: ['disabled']});
+  setInterval(sync, 500); sync();
+})();
