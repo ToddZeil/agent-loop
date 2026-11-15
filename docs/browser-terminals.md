@@ -1,5 +1,37 @@
 # Browser terminals for a supervisor interface
 
+## Reliability review (2026-11-15)
+
+There is no hosted terminal service in this path: xterm.js renders locally in the
+browser, and `loop/web.py` owns the POSIX PTY and WebSocket. The code alone cannot
+establish the cause of a reported failure. One concrete integration defect was that
+the Agent terminal's container was not observed for resizing, so a CLI could retain
+the wrong dimensions; both terminal containers are now observed.
+
+The current PTY survives a browser disconnect while the server stays running, but its
+bounded byte replay is not a terminal screen snapshot: truncation can begin inside an
+escape sequence and full-screen applications may redraw imperfectly. A server restart
+loses the PTY master and the process; saved provider chat IDs can resume a conversation,
+but cannot restore the live process. Slow clients can exceed the replay buffer and be
+disconnected. These are application lifecycle and transport constraints, not evidence
+that xterm.js itself is unreliable.
+
+For a next step, retain xterm.js and evaluate a tmux-backed PTY in a prototype if live
+process survival across server restarts is required. tmux's separate server owns sessions
+and clients can reattach ([tmux documentation](https://github.com/tmux/tmux/wiki/Getting-Started)).
+That change must preserve exclusive worktree ownership, cleanup, session identity and
+multi-tab arbitration; tmux does not survive its own server or host failure. Test CLI
+redraw, resize, server restart, and orphan cleanup before adopting it.
+
+[ttyd](https://github.com/tsl0922/ttyd) provides a packaged browser terminal server but
+also uses xterm.js; replacing the gateway with it would add a service and integration
+work without automatically solving supervisor ownership or persistent sessions.
+[node-pty](https://github.com/microsoft/node-pty) replaces the PTY binding, not the
+browser renderer or lifecycle; it adds a Node backend and is more compelling for Windows
+support. A different renderer such as [Ghostty's VT core](https://lib.ghostty.org/vt/)
+would still need transport, rendering integration and lifecycle management. None is a
+demonstrated fix for the observed symptoms without a reproducible failure.
+
 Investigated 2026-11-14. The local interface is now implemented; see [setup and usage](supervise-web.md).
 The comparison below records the architecture investigation that informed it.
 The target is a terminal running on the same machine as agent-loop, rendered in a browser

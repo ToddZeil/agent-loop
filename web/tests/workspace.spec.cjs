@@ -601,6 +601,10 @@ test('actual interactive terminal supports direct typing, reconnect, and other s
   await page.getByRole('tab',{name:'Agent terminal',exact:true}).click();
   await page.locator('#open-native').click();
   await expect(page.locator('#native-status')).toContainText('Connected',{timeout:20000});
+  const initialCols = await page.evaluate(() => terminal.cols);
+  await page.locator('#native-terminal').evaluate(el => { el.style.width = '400px'; });
+  await expect.poll(() => page.evaluate(() => terminal.cols)).toBeLessThan(initialCols);
+  await page.locator('#native-terminal').evaluate(el => { el.style.width = ''; });
   await page.locator('#native-terminal .xterm-helper-textarea').focus();
   await page.keyboard.type('hello native');await page.keyboard.press('Enter');
   await expect.poll(()=>page.evaluate(()=>terminal.buffer.active.getLine(terminal.buffer.active.cursorY)?.translateToString() || '')).not.toBeNull();

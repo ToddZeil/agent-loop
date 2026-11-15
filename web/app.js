@@ -519,7 +519,9 @@ $('close-terminal').onclick = async () => {
   try { await api(taskURL()+'/terminal/close',{}); disconnectTerminal(); toast('Local shell closed. Workers can resume.'); await refresh(); }
   catch(e) { toast(e.message,true); }
 };
-new ResizeObserver(() => { if (['native','terminal'].includes(activeTab)) { try { fit?.fit(); } catch {} } }).observe($('terminal'));
+const terminalResizeObserver = new ResizeObserver(() => { if (['native','terminal'].includes(activeTab)) { try { fit?.fit(); } catch {} } });
+terminalResizeObserver.observe($('terminal'));
+terminalResizeObserver.observe($('native-terminal'));
 window.addEventListener('beforeunload', () => socket?.close());
 function agentField(row,field) { return row.querySelector(`[data-field="${field}"]`) || row._options?.querySelector(`[data-field="${field}"]`); }
 function goalAgentId(goal, used) {
