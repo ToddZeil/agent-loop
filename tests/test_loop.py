@@ -22,6 +22,27 @@ WORKER = Path(__file__).resolve().parent / "concurrent_worker.py"
 
 
 class AdapterTests(unittest.TestCase):
+    def test_claude_stream_preserves_result_usage_and_session(self):
+        events = [
+            {"type": "system", "subtype": "init", "session_id": "SID"},
+            {"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "id": "tool", "name": "Bash", "input": {"command": "pwd"}}]}},
+            {"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "tool", "content": "/work"}]}},
+            {"type": "result", "is_error": False, "result": "Fixed", "session_id": "SID",
+             "usage": {"input_tokens": 100, "output_tokens": 20}, "total_cost_usd": 0.05},
+        ]
+        output = "\n".join(map(json.dumps, events + [
+            {"type": "rate_limit_event", "rate_limit_info": {"status": "allowed"}}]))
+        result = parse("claude", 0, output, "")
+        self.assertEqual(result.status, "ok")
+        self.assertEqual(result.response, "Fixed")
+        self.assertEqual(result.usage, events[-1]["usage"])
+        self.assertEqual(result.estimated_usd, 0.05)
+        self.assertEqual(session_id("claude", output), "SID")
+        events[-1].update(is_error=True, result="Not logged in")
+        self.assertEqual(parse("claude", 1, "\n".join(map(json.dumps, events)), "").status, "auth_required")
+
     def test_unsupported_model_is_configuration_error_not_quota(self):
         for message in ("The 'GPT-6.1-Sol' model is not supported when using Codex with a ChatGPT account.",
                         'model_not_found', 'Unknown model: bad-model'):

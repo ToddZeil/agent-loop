@@ -245,6 +245,7 @@ test('agent and supervisor token reports update live and survive refresh',async 
   await page.getByLabel('Goal',{exact:true}).fill('ASK_TOKEN_QUESTION: Set the value to 2 after answering the question.');
   await page.getByLabel('Verification command (optional)',{exact:true}).fill(fixture.acceptance);
   await page.locator('#create-form button[name=start]').click();
+  await expect(page.locator('#task-title')).toHaveText('token-worker');
   await expect(page.locator('#task-status')).toHaveText('complete',{timeout:20000});
   await expect(page.locator('#supervisor-token-total')).toHaveText('130');
   await expect(page.locator('#supervisor-token-input')).toHaveText('100');
@@ -662,6 +663,7 @@ test('custom CLI accepts direct input and resumes its explicitly saved chat',asy
   await page.waitForFunction(()=>terminal && Array.from({length:terminal.buffer.active.length},(_,i)=>terminal.buffer.active.getLine(i)?.translateToString()||'').join('\n').includes('Resume=custom-browser-chat'));
   const other=await page.context().newPage();
   await other.goto(page.url());
+  await other.waitForFunction(()=>typeof currentTask === 'function' && currentTask());
   await expect(other.locator('#open-native')).toBeEnabled();
   await other.locator('#open-native').click();
   await expect(other.locator('#native-status')).toContainText('Connected',{timeout:20000});

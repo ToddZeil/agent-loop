@@ -214,6 +214,8 @@ class ContinuousTests(ContinuousBase):
         self.assertTrue(resumed[-1].startswith("P"))
         claude = continuing_worker_command("claude", "P", None, "medium", "SID", "/w")
         self.assertNotIn("--no-session-persistence", claude)
+        self.assertEqual(claude[claude.index("--output-format") + 1], "stream-json")
+        self.assertIn("--verbose", claude)
         self.assertEqual(claude[-2:], ["--resume", "SID"])
         self.assertEqual(claude[claude.index("--effort") + 1], "medium")
         agy = continuing_worker_command("antigravity", "P", None, None, "SID", "/w")
