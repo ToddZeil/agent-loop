@@ -894,7 +894,8 @@ def parse(provider, code, out, err, now=None):
         status = "configuration_error"
     elif any(x in lower for x in ("not logged in", "authentication required", "authentication_failed", "please run /login")):
         status = "auth_required"
-    elif deadline or any(x in lower for x in ("rate_limit", "rate limit", "quota exhausted", "usage limit", "session limit", "weekly limit", "resource_exhausted")):
+    elif deadline or any(x in lower for x in ("rate_limit", "rate limit", "quota exhausted", "usage limit", "session limit", "weekly limit", "resource_exhausted")) or re.search(
+            r"hit your .{0,30}limit|\d+-hour limit|limit reached|out of extra usage", lower):
         status = "rate_limited"
     elif code == 124 or any(x in lower for x in (
         "timed out", "connection", "stream was interrupted", "broken pipe", "overloaded", "503", "502")):
