@@ -13,11 +13,12 @@ import time
 import uuid
 
 from .adapters import asked_question, parse, quota_deadline, usage_fraction, supervisor_command, session_id, context_tokens
-from .continuous import ContinuousRun
+from .continuous import ContinuousRun, worktree_admitted
 from .lite import changed_files, extract_verdict
 from .keeper import Scribe, Ollama
 from .storage import atomic_json
 from .usage import record as record_usage
+from .worker import terminal_owner_path
 
 PROVIDERS = ('codex', 'claude', 'antigravity', 'muse')
 EFFORTS = ('low', 'medium', 'high', 'xhigh', 'max', 'ultra')
@@ -178,6 +179,7 @@ class SupervisedRun(ContinuousRun):
                 self.save_state(latest)
             return result
 
+    @worktree_admitted
     def _consume(self, state, payload):
         status = payload.get('status')
         if status in ('rate_limited', 'provider_wait', 'auth_required'):
@@ -199,6 +201,7 @@ class SupervisedRun(ContinuousRun):
             state['retry_at'] = 0
             self.save_state(state)
 
+    @worktree_admitted
     def _verify(self, state):
         if asked_question(state.get('last_response', '')):
             state['needs_help'] = True
@@ -226,6 +229,7 @@ class SupervisedRun(ContinuousRun):
     def help(self, settings):
         return self._supervisor_turn(settings, self._help)
 
+    @worktree_admitted
     def _supervisor_turn(self, settings, operation):
         home = settings.get('_home')
         if not home:
@@ -461,11 +465,15 @@ class SupervisedRun(ContinuousRun):
         self._active_supervisor_settings = settings
         try:
             self._step(settings)
+        except BlockingIOError:
+            return  # Another worktree owner is active; retry on the next tick.
         except (OSError, ValueError, subprocess.CalledProcessError) as exc:
             state = self.state()
             self._wait(state, 'Task operation failed; operator instruction required: ' + str(exc))
 
     def _step(self, settings):
+        if terminal_owner_path(self.dir, self.worktree).exists():
+            return  # The terminal's durable admission record takes precedence.
         state = self.state()
         self._read_notes(state)
         if state['state'] == 'complete':
@@ -691,6 +699,12 @@ class Fleet:
                             if owner:
                                 owner.close()
                             continue
+                        if terminal_owner_path(fresh.dir, fresh.worktree).exists():
+                            owner = owners.pop(task['id'], None)
+                            if owner:
+                                owner.close()
+                            known.pop(task['id'], None)
+                            continue
                         if task['id'] not in owners:
                             handle = fresh.path('keeper.lock').open('a')
                             try:
@@ -701,6 +715,10 @@ class Fleet:
                                     raise
                                 continue  # An interactive owner must not stop other agents.
                             owners[task['id']] = stack.enter_context(handle)
+                        if terminal_owner_path(fresh.dir, fresh.worktree).exists():
+                            owners.pop(task['id']).close()
+                            known.pop(task['id'], None)
+                            continue
                         if task['id'] not in known:
                             known[task['id']] = fresh
                         run = known[task['id']]

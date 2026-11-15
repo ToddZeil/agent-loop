@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -381,6 +382,57 @@ for line in sys.stdin:
                 await self.post(endpoint+'/native/release',{})
             await ws.close()
 
+    @unittest.skipUnless(__import__('shutil').which('tmux'), 'tmux is not installed')
+    async def test_tmux_agent_recovers_after_server_restart_and_requires_verified_return(self):
+        from loop.worker import terminal_owner_path
+        cli = self.root / 'interactive.py'
+        cli.write_text("import os,sys\nprint('CLI_PID='+str(os.getpid()),flush=True)\nprint('DEPLOY='+os.environ.get('AGENT_LOOP_DEPLOY_COMMAND','MISSING'),flush=True)\nfor line in sys.stdin: print('REPLY='+line.strip(),flush=True)\n")
+        self.controller.use_tmux = True
+        entry = await self.create()
+        endpoint = f"/api/fleets/{entry['id']}/tasks/fix"
+        body = {'program': 'custom', 'command': [sys.executable, str(cli)]}
+        self.assertEqual((await self.post(endpoint + '/native/request', body)).status, 200)
+        first = await self.client.ws_connect(endpoint + '/terminal?mode=agent', headers={'Origin': self.origin})
+        terminal = self.controller.terminals[(entry['id'], 'fix')]
+        self.addCleanup(terminal.tmux.stop)
+        output = await self.output_until(first, ('DEPLOY='+str(Path(__file__).resolve().parents[1]/'scripts'/'merge-deploy')).encode())
+        self.assertIn(b'CLI_PID=', output)
+        # tmux may split output; get the actual owned pane PID directly.
+        pane_pid = subprocess.check_output(terminal.tmux.command('display-message', '-p', '-t', '=agent', '#{pane_pid}'), text=True).strip()
+        run = self.controller.run_for(entry['id'], 'fix')
+        marker = terminal_owner_path(run.dir, run.worktree)
+        self.assertTrue(marker.exists())
+        await first.close()
+        await self.client.close()
+        self.app = create_app(self.root / 'web', use_tmux=True)
+        self.controller = self.app[APP_KEY]
+        self.client = TestClient(TestServer(self.app), cookie_jar=CookieJar(unsafe=True))
+        await self.client.start_server()
+        self.addAsyncCleanup(self.client.close)
+        self.origin = str(self.client.make_url('/')).rstrip('/')
+        await self.client.get('/')
+        second = await self.client.ws_connect(endpoint + '/terminal?mode=agent', headers={'Origin': self.origin})
+        await self.output_until(second, b'CLI_PID=')
+        recovered = self.controller.terminals[(entry['id'], 'fix')]
+        self.assertEqual(pane_pid, subprocess.check_output(recovered.tmux.command('display-message', '-p', '-t', '=agent', '#{pane_pid}'), text=True).strip())
+        await second.send_json({'type': 'resize', 'cols': 90, 'rows': 28})
+        size = ''
+        for _ in range(100):
+            size = subprocess.check_output(recovered.tmux.command('display-message', '-p', '-t', 'agent', '#{pane_width}x#{pane_height}'), text=True).strip()
+            if size == '90x28':
+                break
+            await asyncio.sleep(.05)
+        self.assertEqual(size, '90x28')
+        await second.send_json({'type': 'input', 'data': 'after restart\n'})
+        await self.output_until(second, b'REPLY=after restart')
+        response = await self.post(endpoint + '/native/release', {})
+        self.assertTrue((await response.json())['needs_verification'])
+        self.assertTrue(marker.exists())
+        with mock.patch.object(self.controller, 'resume'):
+            response = await self.post(endpoint + '/native/release', {'verified_no_writers': True})
+        self.assertEqual(response.status, 200, await response.text())
+        self.assertFalse(marker.exists())
+        await second.close()
     async def test_orphan_native_recovery_checks_registry_and_process_identity(self):
         import signal
         entry=await self.create();fleet=self.controller.fleet(entry['id'])
@@ -400,6 +452,53 @@ for line in sys.stdin:
         response = await self.post('/api/fleets',{'name':'Local test','manifest':self.manifest})
         self.assertEqual(response.status,201,await response.text())
         return await response.json()
+
+    async def test_uncertain_terminal_record_blocks_terminal_and_worker_admission(self):
+        from loop.worker import terminal_owner_path, reserve_terminal_workspace, run_attempt
+        from loop.web import locked
+        entry = await self.create()
+        run = self.controller.run_for(entry['id'], 'fix')
+        marker = terminal_owner_path(run.dir, run.worktree)
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = marker.with_name(marker.name.replace('.terminal-owner.json', '.lock'))
+        with locked(lock_path):
+            reserve_terminal_workspace(run.dir, run.worktree, {'id': 'test-owner'})
+            with self.assertRaises(FileExistsError):
+                reserve_terminal_workspace(run.dir, run.worktree, {'id': 'different-owner'})
+        # An interrupted write must block admission too.
+        marker.write_text('{incomplete')
+        with self.assertRaisesRegex(RuntimeError, 'requires reconciliation'):
+            Terminal(run, '/bin/sh')
+        self.assertTrue(run._owner_present())
+        with mock.patch.object(run, '_setup') as setup, mock.patch.object(run, '_verify') as verify:
+            run.step({})
+            setup.assert_not_called()
+            verify.assert_not_called()
+        attempt = self.root / 'blocked-attempt.json'
+        record = {'home': str(run.dir), 'workspace': str(run.worktree)}
+        attempt.write_text(json.dumps(record))
+        with self.assertRaisesRegex(RuntimeError, 'requires reconciliation'):
+            run_attempt(attempt)
+        self.assertEqual(json.loads(attempt.read_text()), record)
+        marker.unlink()
+        self.assertFalse(run._owner_present())
+
+    async def test_legacy_worker_lock_blocks_new_terminal_during_upgrade(self):
+        from loop.worker import legacy_workspace_lock_path, run_attempt
+        from loop.web import locked
+        entry = await self.create()
+        run = self.controller.run_for(entry['id'], 'fix')
+        legacy = legacy_workspace_lock_path(run.dir, run.worktree)
+        legacy.parent.mkdir(parents=True, exist_ok=True)
+        with locked(legacy):
+            self.assertTrue(run._owner_present())
+            with self.assertRaises(BlockingIOError):
+                Terminal(run, '/bin/sh')
+            record = {'home': str(run.dir), 'workspace': str(run.worktree)}
+            attempt = self.root / 'legacy-attempt.json'
+            attempt.write_text(json.dumps(record))
+            self.assertEqual(run_attempt(attempt), 3)
+            self.assertEqual(json.loads(attempt.read_text()), record)
 
     async def ws(self, entry, **kwargs):
         return await self.client.ws_connect(f"/api/fleets/{entry['id']}/tasks/fix/terminal",

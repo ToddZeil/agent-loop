@@ -23,6 +23,20 @@ from another directory. Re-run setup after dependency changes.
 scripts/supervise-web --port 9000 --home /absolute/path/to/browser-registry
 ```
 
+The persistent Agent terminal is enabled when tmux is installed. To opt out for
+new sessions and use the direct terminal:
+
+```sh
+scripts/supervise-web --no-tmux-terminal
+```
+
+It reconnects to a running tmux session after a web-server restart. On returning
+control to the supervisor, it stops tmux and retains the worktree reservation
+until you confirm that all terminal processes capable of writing have exited.
+If ownership is uncertain, leave it reserved. Stop writers running older code
+in other supervisor homes before switching to the new shared worktree lock;
+older versions do not know about it. The worktree shell remains direct.
+
 Keep the registry directory at the same location to retain project selections, agent
 state, and the shared supervisor conversation. One server owns each registry.
 

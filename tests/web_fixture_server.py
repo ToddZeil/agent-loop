@@ -78,7 +78,7 @@ print(json.dumps({'type':'result', 'is_error':False, 'result':'Updated app.py', 
     os.environ['CODEX_HOME']=str(codexhome)
     os.environ['PATH']=str(bindir)+os.pathsep+os.environ['PATH']
     os.environ['AGENT_LOOP_REGISTRY']=str(root/'registry.sqlite')
-    app=create_app(root/'web')
+    app=create_app(root/'web', use_tmux=os.environ.get('WEB_TEST_TMUX') == '1')
     app[APP_KEY].shell='/bin/sh'
     async def fixture(request):
         return web.json_response({'repo':str(repo.resolve()),'secondRepo':str(second_repo.resolve()),

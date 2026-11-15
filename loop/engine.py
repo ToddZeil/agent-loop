@@ -11,7 +11,7 @@ import subprocess
 import sys
 import time
 import uuid
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from pathlib import Path
 
 from .registry import (CapReached, CapWait, DEFAULT_RESERVATION_TOKENS, Outbox,
@@ -27,6 +27,10 @@ from . import health
 # boundary; the supervisor only consumes validated results.
 from .adapters import (Result, asked_question, auth_probe, provider_limits, quota_deadline,
                        run_process, token_total, usage_fraction)
+
+
+class WorkspaceAdmissionLost(Exception):
+    """A worktree changed owners while a detached worker was running."""
 
 
 def git(repo, *args):
@@ -372,6 +376,7 @@ class Engine:
         self.ensure_excluded()
         self.home.mkdir(exist_ok=True)
         self.holding_repo_lock = False
+        self._workspace_admission = None
         self.caps = {}
         self.registry_failed = False
         self.outbox = Outbox(self.home / "outbox")
@@ -953,15 +958,55 @@ class Engine:
     def attempt_path(self, attempt_id):
         return self.home / "attempts" / (attempt_id + ".json")
 
+    def _acquire_workspace_admission(self, workspace):
+        from .worker import workspace_lock_path, legacy_workspace_lock_path, require_unreserved_workspace
+        stack = ExitStack()
+        try:
+            handles = []
+            for path in dict.fromkeys((workspace_lock_path(self.home, workspace),
+                                       legacy_workspace_lock_path(self.home, workspace))):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                handle = stack.enter_context(path.open('a'))
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                handles.append(handle)
+            require_unreserved_workspace(self.home, workspace)
+        except (BlockingIOError, RuntimeError) as exc:
+            stack.close()
+            raise WorkspaceAdmissionLost(str(exc)) from exc
+        except BaseException:
+            stack.close()
+            raise
+        self._workspace_admission = (Path(workspace).resolve(), stack, tuple(h.fileno() for h in handles))
+
+    def _release_workspace_admission(self):
+        admission, self._workspace_admission = self._workspace_admission, None
+        if admission:
+            admission[1].close()
+
+    def _admission_fds(self):
+        return self._workspace_admission[2] if self._workspace_admission else ()
+
     def workspace_owner_present(self, workspace):
         """True when someone still owns this workspace; ownership is the lock."""
-        from .worker import workspace_lock_path
+        if self._workspace_admission and self._workspace_admission[0] == Path(workspace).resolve():
+            return False  # This engine already holds both locks and checked the record.
+        from .worker import workspace_lock_path, legacy_workspace_lock_path, terminal_owner_path
         path = workspace_lock_path(self.home, workspace)
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("w") as handle:
             try:
                 fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
+                return True
+            legacy_path = legacy_workspace_lock_path(self.home, workspace)
+            legacy_path.parent.mkdir(parents=True, exist_ok=True)
+            if legacy_path != path:
+                with legacy_path.open('a') as legacy:
+                    try:
+                        fcntl.flock(legacy, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except BlockingIOError:
+                        return True
+            if terminal_owner_path(self.home, workspace).exists():
                 return True
             fcntl.flock(handle, fcntl.LOCK_UN)
         return False
@@ -1319,7 +1364,7 @@ class Engine:
             return
         self.event(plan["id"], "setup", "running", setup)
         head = git(workspace, "rev-parse", "HEAD")
-        code, out, err = run_process(setup, workspace, plan.get("setup_timeout_seconds", 600))
+        code, out, err = run_process(setup, workspace, plan.get("setup_timeout_seconds", 600), pass_fds=self._admission_fds())
         if code:
             restore_worker_attempt(workspace, head)
             self.event(plan["id"], "setup", "blocked", (out + err)[-4000:])
@@ -1361,7 +1406,7 @@ class Engine:
         head = git(workspace, "rev-parse", "HEAD")
         self.event(run["id"], task["id"], "setup_recipe", recipe["argv"])
         code, out, err = run_process(recipe["argv"], workspace,
-                                     recipe.get("timeout_seconds", 600))
+                                     recipe.get("timeout_seconds", 600), pass_fds=self._admission_fds())
         output = (out + err)[-4000:]
         if not code and changed_files(workspace):
             restore_worker_attempt(workspace, head)
@@ -1460,7 +1505,7 @@ class Engine:
         code, out, err = run_process(task["run"], workspace,
                                      task.get("timeout_seconds",
                                               plan.get("command_timeout_seconds", 3600)),
-                                     tee=tee)
+                                     tee=tee, pass_fds=self._admission_fds())
         if code == 0:
             return Result("ok", out[-4000:], invoked=False)
         # Host commands (simulators, builds) fail transiently often enough to retry
@@ -1488,6 +1533,22 @@ class Engine:
             return None
 
     def tick(self, plan, worker=None, now=None):
+        """Keep keeper-side worktree operations under shared admission."""
+        run = self.initialize(plan)
+        workspace = Path(run['workspace'])
+        deadline = (time.time() if now is None else now) + 1
+        try:
+            self._acquire_workspace_admission(workspace)
+        except WorkspaceAdmissionLost:
+            return 'waiting', deadline
+        try:
+            return self._tick_admitted(plan, worker=worker, now=now)
+        except WorkspaceAdmissionLost:
+            return 'waiting', deadline
+        finally:
+            self._release_workspace_admission()
+
+    def _tick_admitted(self, plan, worker=None, now=None):
         now = time.time() if now is None else now
         run = self.initialize(plan)
         self.flush_outbox()
@@ -1563,7 +1624,7 @@ class Engine:
                         and key not in self.preflighted):
                     self.preflighted.add(key)
                     code, _, _ = run_process(task["check"], workspace,
-                                             plan.get("check_timeout_seconds", 30))
+                                             plan.get("check_timeout_seconds", 30), pass_fds=self._admission_fds())
                     if code == 0:
                         # A check that already passes cannot tell this task's work
                         # apart from no work at all.
@@ -1685,10 +1746,17 @@ class Engine:
                 elif worker:
                     result = worker(task, prompt, workspace)
                 else:
-                    record = self.launch_worker(plan, run, task, row["attempts"] + 1,
-                                                workspace, row["error"],
-                                                before, invocation_id)
-                    result = self.await_worker(record, workspace)
+                    # The detached worker takes these locks itself. Release only
+                    # for its handoff, then reacquire before inspecting or
+                    # changing the worktree; a terminal reservation wins the race.
+                    self._release_workspace_admission()
+                    try:
+                        record = self.launch_worker(plan, run, task, row["attempts"] + 1,
+                                                    workspace, row["error"],
+                                                    before, invocation_id)
+                        result = self.await_worker(record, workspace)
+                    finally:
+                        self._acquire_workspace_admission(workspace)
                     if result is None:
                         # Ownership is unresolved. Leave the attempt record in
                         # place: the next tick reconciles it instead of racing
@@ -1845,7 +1913,7 @@ class Engine:
                     self.apply_result(task, result.response, workspace)
                 if not changed_files(workspace):
                     code, out, err = run_process(task["check"], workspace,
-                                                 plan.get("check_timeout_seconds", 30))
+                                                 plan.get("check_timeout_seconds", 30), pass_fds=self._admission_fds())
                     if code == 0:
                         self.set_task(plan["id"], task["id"], status="done", sha=head, error="")
                         self.decide(plan["id"], task["id"], "Worker made no change",
@@ -1856,7 +1924,7 @@ class Engine:
                         return "progress", 0
                     raise ValueError((out + err)[-4000:] or "Check exited " + str(code))
                 validate_worker_changes(task, workspace, before, head)
-                code, out, err = run_process(task["check"], workspace, plan.get("check_timeout_seconds", 30))
+                code, out, err = run_process(task["check"], workspace, plan.get("check_timeout_seconds", 30), pass_fds=self._admission_fds())
                 if code:
                     raise ValueError((out+err)[-4000:] or "Check exited " + str(code))
                 if git(workspace, "rev-parse", "HEAD") != head:
@@ -1964,7 +2032,7 @@ class Engine:
         for task in plan["tasks"]:
             if self.db.execute("SELECT status FROM tasks WHERE run_id=? AND id=?", (plan["id"], task["id"])).fetchone()[0] != "done":
                 continue
-            code, out, err = run_process(task["check"], workspace, plan.get("check_timeout_seconds", 30))
+            code, out, err = run_process(task["check"], workspace, plan.get("check_timeout_seconds", 30), pass_fds=self._admission_fds())
             if code:
                 failure = (out + err)[-4000:] or "Check exited " + str(code)
                 # The accepted record stays accepted: a successor repairs the

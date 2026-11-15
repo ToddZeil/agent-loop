@@ -362,8 +362,9 @@ class LiteRun:
 
     # ---- providers -----------------------------------------------------
     def _invoke(self, argv, cwd, timeout, idle_timeout=None, activity=None, tee=None):
+        admission = getattr(self, '_admission_local', None)
         return run_process(argv, cwd, timeout, idle_timeout=idle_timeout, activity=activity,
-                           tee=tee)
+                           tee=tee, pass_fds=getattr(admission, 'fds', ()))
 
     def telemetry(self, provider):
         """(usage fraction, long-window reset timestamp), each None when unknown."""
