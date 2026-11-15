@@ -231,7 +231,7 @@ class ContinuousTests(ContinuousBase):
         (self.run.worktree / "new.py").write_text("y")
         self.assertNotEqual(worktree_activity(self.run.worktree), before)
 
-    def test_straggler_holding_the_lock_after_result_is_reaped(self):
+    def test_unknown_lock_holder_is_not_killed_after_result(self):
         from loop.worker import workspace_lock_path
         lock = workspace_lock_path(self.run.dir, self.run.worktree)
         lock.parent.mkdir(parents=True, exist_ok=True)
@@ -255,8 +255,13 @@ class ContinuousTests(ContinuousBase):
         state = self.run.state()
         state["attempt"] = "a1"
         payload = self.run._reconcile(state)
-        self.assertEqual(payload["status"], "ok")
+        self.assertIsNone(payload)
+        self.assertIsNone(straggler.poll())
+        self.assertTrue(self.run._owner_present())
+        straggler.kill()
         straggler.wait(timeout=5)
+        payload = self.run._reconcile(state)
+        self.assertEqual(payload["status"], "ok")
         self.assertFalse(self.run._owner_present())
 
 

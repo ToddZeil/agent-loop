@@ -5,6 +5,8 @@ provider turn; the keeper reconciles its lock and durable result before it can
 launch another turn or accept a change.
 """
 import fcntl
+from contextlib import ExitStack
+from functools import wraps
 import hashlib
 import json
 import os
@@ -13,6 +15,7 @@ import signal
 import subprocess
 import sys
 import time
+import threading
 import uuid
 from pathlib import Path
 
@@ -21,9 +24,39 @@ from .adapters import (Result, context_tokens, parse, quota_deadline,
 from .lite import DEFAULTS, LiteRun, changed_files, extract_verdict, git, tail
 from .storage import atomic_json
 from .usage import record as record_usage
-from .worker import process_identity, workspace_lock_path
+from .worker import process_identity, workspace_lock_path, legacy_workspace_lock_path, terminal_owner_path
 
 VERSION = 1
+
+
+def worktree_admitted(method):
+    """Hold admission across a keeper operation that can touch the worktree."""
+    @wraps(method)
+    def guarded(self, *args, **kwargs):
+        local = getattr(self, '_admission_local', None)
+        if local is None:
+            local = self._admission_local = threading.local()
+        if getattr(local, 'held', False):
+            return method(self, *args, **kwargs)
+        with ExitStack() as stack:
+            paths = (workspace_lock_path(self.dir, self.worktree),
+                     legacy_workspace_lock_path(self.dir, self.worktree))
+            handles = []
+            for path in dict.fromkeys(paths):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                handle = stack.enter_context(path.open('a'))
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                handles.append(handle)
+            if terminal_owner_path(self.dir, self.worktree).exists():
+                raise BlockingIOError('Terminal ownership requires reconciliation')
+            local.held = True
+            local.fds = tuple(handle.fileno() for handle in handles)
+            try:
+                return method(self, *args, **kwargs)
+            finally:
+                local.held = False
+                local.fds = ()
+    return guarded
 
 
 def failure_key(command, code, output):
@@ -100,6 +133,7 @@ class ContinuousRun(LiteRun):
                 digest.update(b"<deleted>")
         return digest.hexdigest()
 
+    @worktree_admitted
     def _setup(self, state):
         if state["setup_done"]:
             return
@@ -131,6 +165,16 @@ class ContinuousRun(LiteRun):
                 fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
                 return True
+            legacy_path = legacy_workspace_lock_path(self.dir, self.worktree)
+            legacy_path.parent.mkdir(parents=True, exist_ok=True)
+            if legacy_path != path:
+                with legacy_path.open('a') as legacy:
+                    try:
+                        fcntl.flock(legacy, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except BlockingIOError:
+                        return True
+            if terminal_owner_path(self.dir, self.worktree).exists():
+                return True
             fcntl.flock(handle, fcntl.LOCK_UN)
         return False
 
@@ -151,11 +195,9 @@ class ContinuousRun(LiteRun):
             return True
 
     def _reap_stragglers(self, record):
-        """Kill leftovers that still hold a finished worker's lock.
-
-        Only called once the wrapper has written its result, so anything still
-        holding the inherited lock descriptor is a descendant of that worker.
-        """
+        """Stop the recorded worker group without signalling unknown owners."""
+        if terminal_owner_path(self.dir, self.worktree).exists():
+            return  # Never kill holders belonging to an uncertain terminal owner.
         pid = record.get("provider_pid")
         recorded = record.get("provider_start_identity")
         current = process_identity(pid) if pid else ""
@@ -164,18 +206,8 @@ class ContinuousRun(LiteRun):
                 os.killpg(pid, signal.SIGKILL)
             except (ProcessLookupError, PermissionError):
                 pass
-        lock = workspace_lock_path(self.dir, self.worktree)
-        try:
-            holders = subprocess.run(["lsof", "-t", str(lock)], capture_output=True,
-                                     text=True, timeout=10).stdout.split()
-        except (OSError, subprocess.SubprocessError):
-            return
-        for holder in holders:
-            if holder.isdigit() and int(holder) not in (os.getpid(), record.get("pid")):
-                try:
-                    os.kill(int(holder), signal.SIGKILL)
-                except (ProcessLookupError, PermissionError):
-                    pass
+        # A shared lock holder can belong to another supervisor. Do not signal
+        # arbitrary lsof results; an unidentified holder remains fail-closed.
         for _ in range(20):
             if not self._owner_present():
                 return
@@ -283,6 +315,7 @@ class ContinuousRun(LiteRun):
                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                 stderr=subprocess.DEVNULL, start_new_session=True)
 
+    @worktree_admitted
     def _verify(self, state):
         files = changed_files(self.worktree)
         if git(self.worktree, "rev-parse", "HEAD") != state["accepted_commit"]:
@@ -346,9 +379,11 @@ class ContinuousRun(LiteRun):
             return False
         state.update(state="commit_pending", verified_tree=before)
         self.save_state(state)
-        subprocess.check_call(["git", "-C", str(self.worktree), "add", "--", *files])
+        inherited_locks = getattr(getattr(self, '_admission_local', None), 'fds', ())
+        subprocess.check_call(["git", "-C", str(self.worktree), "add", "--", *files], pass_fds=inherited_locks)
         subprocess.check_call(["git", "-C", str(self.worktree), "commit", "-m",
-                               "lite: complete " + self.id + " attempt " + state["verification_attempt"]])
+                               "lite: complete " + self.id + " attempt " + state["verification_attempt"]],
+                              pass_fds=inherited_locks)
         state.update(state="complete", accepted_commit=git(self.worktree, "rev-parse", "HEAD"),
                      completed_at=self.clock(), next_action="none", wait_reason="")
         state["progress"].append({"at": self.clock(), "kind": "objective acceptance passed",
@@ -405,6 +440,7 @@ class ContinuousRun(LiteRun):
             return False
         return True
 
+    @worktree_admitted
     def _consume(self, state, payload):
         attempt = state["attempt"]
         state["attempt"] = None
@@ -484,6 +520,7 @@ class ContinuousRun(LiteRun):
                 return True
         return False
 
+    @worktree_admitted
     def _reconcile_commit(self, state):
         head = git(self.worktree, "rev-parse", "HEAD")
         if head == state["accepted_commit"]:
@@ -511,6 +548,8 @@ class ContinuousRun(LiteRun):
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
                 raise RuntimeError("Another keeper is already running for " + self.id)
+            if terminal_owner_path(self.dir, self.worktree).exists():
+                raise RuntimeError('Terminal ownership requires reconciliation before this worktree can be used')
             state = self.state()
             turns = 0
             while state["state"] != "complete":
@@ -566,6 +605,11 @@ class ContinuousRun(LiteRun):
                         self._setup(state)
                         if state["state"] != "waiting":
                             self._launch(state)
+                    state = self.state()
+                except BlockingIOError:
+                    if max_turns is not None:
+                        break
+                    self.sleep(0.2)
                     state = self.state()
                 except (OSError, ValueError, subprocess.CalledProcessError) as exc:
                     self._wait(state, "recoverable keeper error: " + str(exc),

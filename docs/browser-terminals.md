@@ -1,5 +1,136 @@
 # Browser terminals for a supervisor interface
 
+## Lock-ownership prototype and crash experiments
+
+`python3 scripts/probe-tmux-ownership.py` tests a real descriptor handoff on
+macOS/POSIX: the controller takes both existing flock locks and sends their open
+file descriptions over a local Unix socket to a tmux pane wrapper before closing
+its copies. The wrapper retains both locks and starts an interactive shell. The
+probe verified the shell could run after handoff, both locks remained unavailable
+to another process, and they became available after normal session shutdown.
+
+Additional isolated experiments on this machine:
+
+- `--guardian-only`: killing a separate lock holder released both locks while the
+  tmux shell continued running. A guardian alone is not a safe ownership model.
+- `--crash-pane`: killing the pane wrapper caused the test shell to exit and the
+  locks to be released. This is only one child behavior, not a safety guarantee.
+- `--crash-pane --resistant`: a simulated child that closed inherited descriptors
+  and ignored SIGHUP stayed alive after the wrapper was killed, while both locks
+  were released. This demonstrates a concrete orphan-writer risk.
+- `--dual --crash-pane --resistant`: a second holder kept both locks when it alone
+  was killed because the pane still held them. After the pane was also killed,
+  the simulated resistant child survived without locks. Redundancy reduces a
+  single-failure window but is not a complete process-lifetime guarantee.
+
+The probe uses disposable lock files and an isolated tmux server; it kills the
+simulated resistant child it starts. It does not control the actual supervisor,
+prove browser recovery, or test real providers. The handoff is a more promising
+building block than a guardian alone, but production needs a deliberate policy
+for orphaned or daemonized children, authenticated reattachment and identity,
+startup crashes, cleanup, and lock release before worker scheduling. A process
+that deliberately closes inherited descriptors cannot itself be relied on to
+retain a POSIX advisory lock. No production backend is enabled by this experiment.
+
+A stronger candidate combines descriptor handoff with a durable ownership record.
+Write the record before launching the CLI, and make every worker/terminal entry
+point check it while holding the same workspace admission lock. If the owner or
+tmux session disappears unexpectedly, treat the worktree as unavailable until
+reconciliation proves the writers are gone or an operator resolves it; do not
+infer safety just from a free flock. This trades automatic recovery for avoiding
+a second writer when an orphan cannot be identified. This is a design proposal,
+not implemented or verified by the prototype; it also depends on finding and
+covering every worktree writer and defining reliable cleanup on each platform.
+
+The first admission primitives now exist in `loop/worker.py`: a terminal intent
+record can be created exclusively while holding the workspace lock, and the
+worker, supervisor, terminal and cleanup paths reject a worktree with a record.
+An incomplete record also blocks admission. `loop/tmux_session.py` implements an
+experimental tmux session lifecycle using that record; a real subprocess test
+recovered its session after the launching process exited. The admission lock
+and record now use per-worktree Git metadata, so new supervisors in different
+homes share them; they also check their own legacy home-local lock. During an
+upgrade, an old worker in a different supervisor home does not know about the
+new shared lock, so all old writers must be stopped before enabling this design.
+The Agent terminal uses this backend when tmux is installed and can opt out for
+new sessions with `--no-tmux-terminal`. Returning
+control stops tmux and requires explicit operator verification that no terminal
+writer remains before clearing the record; a tmux inspection error leaves the
+record intact. Recovery for malformed records and a full audit of all worktree
+writers remain outstanding. The tmux mode remains experimental.
+
+## Repeatable tmux probe
+
+Run `python3 scripts/probe-tmux-terminal.py` with tmux installed. It creates a
+private tmux server and a disposable shell, exercises an alternate screen, resizes
+the attached PTY, detaches and reattaches, and verifies the original shell PID,
+screen redraw and subsequent input. It kills its private server when finished.
+This is a transport and screen experiment, not a managed agent integration.
+
+The supervisor cannot safely wrap its current terminal command in tmux as-is.
+`Terminal` and its direct child hold the keeper and workspace locks; a detached
+tmux pane can outlive both and continue editing after those locks are released.
+Production integration needs a persistent owner that holds both locks for the
+entire pane lifetime, durable session identity, safe reattachment after restart,
+and explicit teardown before locks are released. Recovery must handle crashes at
+each startup and shutdown boundary, and preserve the single-writer invariant.
+
+## Further prototype comparisons (2026-11-15)
+
+These tests used disposable shell processes on macOS arm64 and headless Chromium;
+they did not attach to a managed worker or change the running supervisor.
+
+| Configuration | Result | Limit |
+| --- | --- | --- |
+| ttyd 1.7.7 + Zellij 0.46.0 | Stopping and restarting ttyd preserved the shell PID; reattachment redrew earlier output and accepted new input. After reducing the browser viewport, `stty size` reported `31 110`. | Zellij remained running. Its default startup tip intercepted input on the first attempt; disabling startup tips and using its compact layout allowed the test to run. |
+| Independent PTY owner + xterm.js | A disposable Node process held a node-pty shell and a headless xterm 6.0.0 screen, serialized via `@xterm/addon-serialize` 0.14.0. After restarting a separate WebSocket gateway, the browser reconnected to the same PID and restored a simple alternate-screen marker. Resizing from 80x24 to 100x35 reached the shell. | This was a small experimental implementation, not the Python supervisor or a production service. The alternate screen was generated by shell escape sequences, not a real full-screen agent. |
+| Existing supervisor | Focused real-PTY shell reconnect/resize/ownership and native agent terminal tests passed. | The tests do not establish survival of a supervisor server restart; the current server owns the PTY master. |
+
+The independent-owner result demonstrates a viable approach for a gateway restart,
+but it introduces process discovery, IPC, screen serialization and lifecycle work.
+It must retain worktree locks across failures, arbitrate clients, handle slow output,
+clean up orphans, and securely authenticate the local IPC before production use.
+Neither that owner nor tmux or Zellij preserves a running process after its own owner
+or the host dies. Zellij's startup UI also needs explicit configuration for an
+embedded single-agent experience. Real agent TUIs, continuous heavy output, owner
+crashes, lock recovery and concurrent tabs remain untested for these prototypes.
+
+The separate owner prototype used node-pty for convenience; it is not evidence that
+replacing Python's PTY binding is necessary. Zellij was installed through Homebrew;
+both experimental sessions and gateway processes were removed after the tests.
+
+## Isolated experiments (2026-11-15)
+
+On this macOS arm64 machine, a headless Chromium browser connected to disposable
+loopback ttyd sessions running `/bin/sh`; no supervisor worktree or real agent was
+attached. The experiment used ttyd 1.7.7, tmux 3.8, and node-pty 1.1.0.
+
+| Experiment | Observation | Scope |
+| --- | --- | --- |
+| ttyd with a direct shell | Typing worked; browser reload started a different shell PID. | One shell and reload; no persistent backend. |
+| ttyd with tmux | After reload, the shell PID was unchanged, earlier output was redrawn, and new input worked. | One tmux session, one browser tab. |
+| Restart ttyd with tmux | After stopping and restarting ttyd, the browser reattached to the same shell PID, redrew earlier output, and accepted new input. | tmux server remained running; this was not a supervisor restart or host restart. |
+| node-pty | Spawned an interactive shell, accepted input, and changed `stty size` from `24 80` to `35 100`. | Local PTY API only; no browser transport or process recovery was tested. |
+
+The tmux tests used a dedicated socket and `tmux -L agent-loop-experiment
+new-session -A -s probe /bin/sh`; the test socket and processes were removed afterward.
+The browser check examined shell PID and terminal WebSocket output, not visual fidelity
+of a full-screen application. The first tmux probe sent input before startup completed;
+that input did not reach the shell. Waiting for startup resolved it, underscoring the
+need for explicit readiness rather than a fixed delay in any integration.
+
+The npm-installed node-pty package's macOS arm64 `spawn-helper` was not executable in
+this environment, so spawning initially failed; making that disposable helper executable
+allowed the PTY test to pass. This is an observation about this install, not a general
+failure-rate claim. tmux and ttyd were installed through Homebrew for the experiment;
+the experiment also installed their dependencies and updated Homebrew's CA certificates.
+
+These results support a tmux-backed prototype, not an immediate replacement: the current
+supervisor intentionally owns locks and process cleanup, and a persistent tmux server
+would change those guarantees. Test actual provider TUIs, resize, alternate screens,
+large output, reconnect races, ownership and orphan cleanup before deploying it. Other
+options remain architectural comparisons, not hands-on results.
+
 ## Reliability review (2026-11-15)
 
 There is no hosted terminal service in this path: xterm.js renders locally in the

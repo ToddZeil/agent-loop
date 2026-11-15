@@ -5,6 +5,34 @@ async function optionalSettings(page) { if(await page.locator('#optional-setting
 
 async function agentSettings(page) { if(await page.locator('#agent-settings').getAttribute('open') === null) await page.locator('#agent-settings > summary').click(); }
 
+test('tmux agent survives browser reload and requires verified return', async ({page,request}) => {
+  test.skip(process.env.WEB_TEST_TMUX !== '1', 'Run with WEB_TEST_TMUX=1 and tmux installed');
+  const fixture=await (await request.get('/test-fixture')).json();
+  await page.goto('/');
+  await page.getByRole('button',{name:'Add your first agent'}).click();
+  await optionalSettings(page);
+  await page.getByLabel('Agent ID',{exact:true}).fill('tmux-browser');
+  await page.getByLabel('Repository root',{exact:true}).fill(fixture.repo);
+  await page.getByLabel('Goal',{exact:true}).fill('Verify terminal recovery.');
+  await page.getByRole('button',{name:'Add agents',exact:true}).click();
+  await page.getByRole('tab',{name:'Agent terminal',exact:true}).click();
+  await page.locator('#open-native').click();
+  await expect(page.locator('#native-status')).toContainText('Connected',{timeout:20000});
+  await page.locator('#native-terminal .xterm-helper-textarea').focus();
+  await page.keyboard.type('before reload'); await page.keyboard.press('Enter');
+  await page.waitForFunction(()=>terminal && Array.from({length:terminal.buffer.active.length},(_,i)=>terminal.buffer.active.getLine(i)?.translateToString()||'').join('\n').includes('Codex reply: before reload'));
+  await page.reload();
+  await expect(page.locator('#native-status')).toContainText('Connected',{timeout:20000});
+  await page.waitForFunction(()=>terminal && Array.from({length:terminal.buffer.active.length},(_,i)=>terminal.buffer.active.getLine(i)?.translateToString()||'').join('\n').includes('Codex reply: before reload'));
+  page.once('dialog', dialog=>dialog.dismiss());
+  await page.locator('#return-native').click();
+  await expect(page.locator('#toast')).toContainText('Worktree remains reserved');
+  await expect(page.locator('#native-status')).toContainText('worktree remains reserved');
+  page.once('dialog', dialog=>dialog.accept());
+  await page.locator('#return-native').click();
+  await expect(page.locator('#toast')).toContainText('returned to the supervisor');
+});
+
 test('one supervisor: add an agent, use a real terminal, send direction, and complete',async ({page,request}) => {
   const errors=[];page.on('pageerror',error=>errors.push(error.message));
   const fixture=await (await request.get('/test-fixture')).json();

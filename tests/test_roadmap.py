@@ -49,6 +49,19 @@ class RoadmapTests(unittest.TestCase):
         self.assertEqual(git(self.repo, 'status', '--porcelain'), '')
         self.assertEqual((self.repo / '.gitignore').read_text(), '__pycache__/\n')
 
+    def test_terminal_reservation_blocks_setup_and_milestone_writer(self):
+        import fcntl
+        from loop.worker import workspace_lock_path, reserve_terminal_workspace
+        run = self.engine.initialize(self.plan)
+        workspace = Path(run['workspace'])
+        lock = workspace_lock_path(self.engine.home, workspace)
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        with lock.open('a') as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            reserve_terminal_workspace(self.engine.home, workspace, {'id': 'terminal-owner'})
+        self.assertEqual(self.engine.tick(self.plan, self.good, now=100), ('waiting', 101))
+        self.assertFalse((workspace / 'answer.py').exists())
+
     def test_validate_plan_uses_target_root(self):
         (self.repo / 'link').symlink_to(self.repo.parent)
         self.plan['tasks'][0]['files'] = ['link/outside.py']

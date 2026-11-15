@@ -206,16 +206,17 @@ function render() {
   }
   for(const id of ['native-program','native-command','native-resume']) $(id).disabled=!!task.terminal_requested;
   $('open-native').disabled=!!task.delete_requested || socket?.readyState === WebSocket.CONNECTING;
-  $('restart-native').disabled=!task.terminal_requested || !!task.attempt;
+  $('restart-native').disabled=!task.terminal_requested || !!task.attempt || task.terminal_backend === 'tmux';
   $('open-native').textContent=nativeConnected ? 'Show terminal' : task.terminal_open && task.terminal_mode !== 'shell' ? 'Reconnect here' : task.terminal_requested && !task.native_ready ? 'Waiting for current turn…' : task.native_session_id ? 'Resume agent chat' : 'Open Agent terminal';
   $('return-native').disabled=!task.terminal_requested;
   const recovery=task.native_session_id ? 'chat saved for recovery' : ['codex','claude'].includes(task.native_provider) ? 'chat ID pending' : 'save the chat ID for restart recovery';
-  $('native-status').textContent=nativeConnected ? `Connected · ${task.native_provider} · ${recovery} · direct keyboard input` : task.terminal_requested && !task.native_ready && !task.terminal_open ? 'Waiting for the current worker turn to finish…' : task.terminal_requested ? `Agent paused · ${recovery}` : 'Direct CLI access';
+  $('native-status').textContent=task.terminal_recovery_required ? 'Terminal stopped · worktree remains reserved until recovery' : nativeConnected ? `Connected · ${task.native_provider} · ${task.terminal_backend === 'tmux' ? 'session survives server restart · ' : ''}${recovery} · direct keyboard input` : task.terminal_requested && !task.native_ready && !task.terminal_open ? 'Waiting for the current worker turn to finish…' : task.terminal_requested ? `Agent paused · ${recovery}` : 'Direct CLI access';
+  if(task.terminal_recovery_required) $('open-native').disabled=true;
   const ph=$('native-placeholder');
   if(ph && !nativeConnected) {
     const waiting=task.terminal_requested && !task.native_ready && !task.terminal_open, starting=task.terminal_requested && !waiting && !socket;
-    ph.querySelector('h3').textContent=waiting ? 'Waiting for the current turn to finish…' : starting ? 'Starting the CLI…' : 'Talk directly to your CLI.';
-    ph.querySelector('p').textContent=waiting ? 'The terminal opens automatically as soon as the worker reaches a turn boundary.' : starting ? 'Connecting to the interactive session.' : 'Opens after the current turn and resumes the saved session when available.';
+    ph.querySelector('h3').textContent=task.terminal_recovery_required ? 'Worktree reserved' : waiting ? 'Waiting for the current turn to finish…' : starting ? 'Starting the CLI…' : 'Talk directly to your CLI.';
+    ph.querySelector('p').textContent=task.terminal_recovery_required ? 'Use Return to supervisor after checking that terminal processes have exited.' : waiting ? 'The terminal opens automatically as soon as the worker reaches a turn boundary.' : starting ? 'Connecting to the interactive session.' : 'Opens after the current turn and resumes the saved session when available.';
   }
   if(!nativeReturning && (nativeAutoAttach === `${selectedFleet}/${selectedTask}` || (activeTab === 'native' && task.terminal_requested && !socket)) && (task.native_ready || (task.terminal_open && task.terminal_mode !== 'shell'))) {
     nativeAutoAttach=null; const takeover=nativeTakeover === `${selectedFleet}/${selectedTask}`;nativeTakeover=null;connectTerminal('agent',takeover).catch(e=>toast(e.message,true));
@@ -510,7 +511,16 @@ $('restart-native').onclick=async()=>{
 $('return-native').onclick=async()=>{
   nativeReturning=true;
   try {
-    const result=await api(taskURL()+'/native/release',{});
+    let result=await api(taskURL()+'/native/release',{});
+    if(result.needs_verification) {
+      nativeAutoAttach=null;disconnectTerminal();
+      await refresh();
+      if(!confirm(`The terminal was stopped, but detached processes may still be running in ${result.worktree}. Inspect them and confirm that no terminal process can write to this worktree before returning control to the supervisor. Have you verified this?`)) {
+        toast('Worktree remains reserved until you verify that terminal processes have exited.',true);
+        return;
+      }
+      result=await api(taskURL()+'/native/release',{verified_no_writers:true});
+    }
     nativeAutoAttach=null;disconnectTerminal();await refresh();selectTab('terminal');
     toast(result.start_error ? `Terminal closed; automatic work is waiting: ${result.start_error}` : 'Interactive terminal closed. Agent returned to the supervisor.', !!result.start_error);
   } catch(e) { toast(e.message,true); } finally {nativeReturning=false;}

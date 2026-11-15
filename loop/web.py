@@ -28,7 +28,8 @@ from .native import agent_terminal_command, discover_session, terminal_config, s
 from .usage import record as record_usage
 from .usage import agent_usage, combine as combine_usage
 from .supervise import Fleet, EFFORTS
-from .worker import workspace_lock_path, process_identity
+from .worker import workspace_lock_path, legacy_workspace_lock_path, terminal_owner_path, process_identity, require_unreserved_workspace
+from .tmux_session import TmuxSession
 
 ROOT = Path(__file__).resolve().parent.parent
 ASSETS = ROOT / 'web'
@@ -73,7 +74,7 @@ def tail(path, limit=65536):
 
 
 class Terminal:
-    def __init__(self, run, shell, mode='shell', owner_home=None):
+    def __init__(self, run, shell, mode='shell', owner_home=None, use_tmux=False):
         self.mode = mode
         self.run = run
         self.session_id = None
@@ -92,11 +93,15 @@ class Terminal:
         self.last_seen = time.monotonic()
         self.master = None
         self.process = None
+        self.tmux = None
         try:
             keeper_lock = self.locks.enter_context(locked(run.path('keeper.lock')))
             lock_path = workspace_lock_path(run.dir, run.worktree)
             lock_path.parent.mkdir(parents=True, exist_ok=True)
             workspace_lock = self.locks.enter_context(locked(lock_path))
+            legacy_path = legacy_workspace_lock_path(run.dir, run.worktree)
+            legacy_path.parent.mkdir(parents=True, exist_ok=True)
+            legacy_lock = workspace_lock if legacy_path == lock_path else self.locks.enter_context(locked(legacy_path))
             state = run.state()
             if state['attempt'] or state['state'] in ('working', 'verifying', 'commit_pending'):
                 raise ValueError('Resume the manager to reconcile this task before opening a shell')
@@ -104,6 +109,20 @@ class Terminal:
             if mode != 'shell':
                 self.native_config = terminal_config(run)
                 argv, self.session_id, self.provider = agent_terminal_command(run, self.native_config)
+            agent_argv = argv
+            marker = terminal_owner_path(run.dir, run.worktree)
+            recovering = False
+            if use_tmux and mode != 'shell':
+                if marker.exists():
+                    self.tmux = TmuxSession.recover(run.dir, run.worktree)
+                    recovering = True
+                else:
+                    self.tmux = TmuxSession.start(run.dir, run.worktree, argv, env={
+                        'COLORTERM': 'truecolor',
+                        'AGENT_LOOP_DEPLOY_COMMAND': str(ROOT / 'scripts' / 'merge-deploy')})
+                argv = self.tmux.attach_command()
+            else:
+                require_unreserved_workspace(run.dir, run.worktree)
             self.master, slave = pty.openpty()
             self.resize(100, 28)
             try:
@@ -113,23 +132,27 @@ class Terminal:
                     cwd=run.worktree, env={**os.environ, 'TERM': 'xterm-256color',
                                            'COLORTERM': 'truecolor', 'AGENT_LOOP_DEPLOY_COMMAND': str(ROOT / 'scripts' / 'merge-deploy')},
                     stdin=slave, stdout=slave, stderr=slave, start_new_session=True,
-                    close_fds=True, pass_fds=(keeper_lock.fileno(), workspace_lock.fileno()))
+                    close_fds=True, pass_fds=tuple(dict.fromkeys((keeper_lock.fileno(), workspace_lock.fileno(), legacy_lock.fileno()))))
             finally:
                 os.close(slave)
             if mode != 'shell':
                 previous = state.get('interactive_session')
-                if previous:
+                if recovering and previous:
+                    self.session_id = previous.get('session_id') or self.session_id
+                    self.opened_at = previous.get('opened_at', self.opened_at)
+                if previous and not recovering:
                     record_usage(state, 'worker', previous.get('provider', 'codex'), {}, 'interactive:' + previous['id'], model=state.get('model'), now=time.time())
-                state['interactive_session'] = {'id': uuid.uuid4().hex, 'session_id': self.session_id,
-                                                 'provider': self.provider, 'opened_at': time.time(), 'server_home': str(owner_home) if owner_home else None,
-                                                 'pid': self.process.pid, 'start_identity': process_identity(self.process.pid)}
+                state['interactive_session'] = {'id': previous['id'] if recovering and previous else uuid.uuid4().hex, 'session_id': self.session_id,
+                                                 'provider': self.provider, 'opened_at': self.opened_at, 'server_home': str(owner_home) if owner_home else None,
+                                                 'pid': self.process.pid, 'start_identity': process_identity(self.process.pid),
+                                                 'backend': 'tmux' if self.tmux else 'direct'}
                 if self.session_id and self.provider == state['provider']:
                     state['session_id'] = self.session_id
                     state.setdefault('sessions', {})[self.provider] = self.session_id
                 run.save_state(state)
                 if self.session_id:
                     self.observed_sessions.add(self.session_id)
-                    store_session(run, self.provider, self.session_id, self.native_config, fresh=self.provider == 'claude' and '--session-id' in argv)
+                    store_session(run, self.provider, self.session_id, self.native_config, fresh=self.provider == 'claude' and '--session-id' in agent_argv)
                 if self.provider == 'codex':
                     self.session_watch = asyncio.create_task(self.watch_session())
             os.set_blocking(self.master, False)
@@ -170,6 +193,11 @@ class Terminal:
             raise ValueError('Invalid terminal dimensions')
         if self.master is not None:
             fcntl.ioctl(self.master, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
+            if self.tmux and self.process and self.process.poll() is None:
+                try:
+                    os.kill(self.process.pid, signal.SIGWINCH)
+                except ProcessLookupError:
+                    pass
 
     def read(self):
         try:
@@ -218,16 +246,25 @@ class Terminal:
                 return
             await self.event.wait()
 
-    async def close(self):
+    async def close(self, *, detach=False):
         if self.closed:
             return
         self.closed = True
+        if self.tmux and not detach:
+            await asyncio.to_thread(self.tmux.stop)
         # Never signal a reaped shell's old PID: it may now name another process group.
         if self.process.poll() is None:
             try:
                 os.killpg(self.process.pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
+            except PermissionError:
+                # Some tmux clients leave the original process group while
+                # exiting; the unreaped child PID still names this process.
+                try:
+                    self.process.terminate()
+                except ProcessLookupError:
+                    pass
             try:
                 await asyncio.wait_for(asyncio.shield(self.reaper), 2)
             except asyncio.TimeoutError:
@@ -236,6 +273,11 @@ class Terminal:
                         os.killpg(self.process.pid, signal.SIGKILL)
                     except ProcessLookupError:
                         pass
+                    except PermissionError:
+                        try:
+                            self.process.kill()
+                        except ProcessLookupError:
+                            pass
         await self.reaper
         if self.ws and not self.ws.closed:
             await self.ws.close()
@@ -245,7 +287,7 @@ class Terminal:
 
 
 class Controller:
-    def __init__(self, home):
+    def __init__(self, home, use_tmux=False):
         self.home = Path(home).resolve()
         self.home.mkdir(parents=True, exist_ok=True)
         self.index = self.home / 'fleets.json'
@@ -261,6 +303,7 @@ class Controller:
         self.snapshot_body = None
         self.server_commit = deploy.git(ROOT, 'rev-parse', 'HEAD')
         self.terminals = {}
+        self.use_tmux = use_tmux
         self.shell = os.environ.get('SHELL', '/bin/zsh' if sys.platform == 'darwin' else '/bin/bash')
         self.registry_lock = locked(self.home / 'web.lock')
 
@@ -388,6 +431,11 @@ class Controller:
                     lock_path = workspace_lock_path(run.dir, run.worktree)
                     lock_path.parent.mkdir(parents=True, exist_ok=True)
                     locks.enter_context(locked(lock_path))
+                    legacy_path = legacy_workspace_lock_path(run.dir, run.worktree)
+                    legacy_path.parent.mkdir(parents=True, exist_ok=True)
+                    if legacy_path != lock_path:
+                        locks.enter_context(locked(legacy_path))
+                    require_unreserved_workspace(run.dir, run.worktree)
                     if run.state().get('attempt'):
                         continue
                     # Git checks ownership; never recursively delete a supplied worktree path.
@@ -531,6 +579,7 @@ class Controller:
                     terminal = self.terminals.get((entry['id'], task['id']))
                     task['terminal_open'] = bool(terminal and not terminal.exited)
                     task['terminal_mode'] = terminal.mode if task['terminal_open'] else None
+                    task['terminal_backend'] = ('tmux' if self.use_tmux or terminal_owner_path(runs[task['id']].dir, runs[task['id']].worktree).exists() else 'direct')
                     task['delete_requested'] = bool(task_specs[task['id']].get('delete_requested'))
                     task['delete_error'] = task_specs[task['id']].get('delete_error')
                     task['terminal_requested'] = bool(task_specs[task['id']].get('terminal_requested'))
@@ -540,8 +589,17 @@ class Controller:
                     task['native_provider'] = native['provider']
                     active = task.get('interactive_session') or {}
                     task['native_session_id'] = (active.get('session_id') if active.get('provider', 'codex') == native['provider'] else None) or saved_session(runs[task['id']], native['provider'], native).get('session_id')
+                    marker = terminal_owner_path(runs[task['id']].dir, runs[task['id']].worktree)
+                    task['terminal_recovery_required'] = False
+                    if marker.exists():
+                        try:
+                            session = TmuxSession.recover(runs[task['id']].dir, runs[task['id']].worktree)
+                            task['terminal_recovery_required'] = not session.alive()
+                        except (OSError, RuntimeError, ValueError):
+                            task['terminal_recovery_required'] = True
                     task['native_ready'] = bool(task['terminal_requested'] and not task['attempt']
                         and task['state'] not in ('working', 'verifying', 'commit_pending')
+                        and not task['terminal_recovery_required']
                         and not lock_held(runs[task['id']].path('keeper.lock')))
                 results.append({**entry, 'running': self.running(entry), 'tasks': tasks,
                                 'supervisor': json.loads(fleet.manifest.read_text())['supervisor']})
@@ -590,11 +648,11 @@ class Controller:
             self.guardian_task.cancel()
             await asyncio.gather(self.guardian_task, return_exceptions=True)
         for terminal in self.terminals.values():
-            await terminal.close()
+            await terminal.close(detach=True)
 
     async def cleanup(self, app):
         for terminal in self.terminals.values():
-            await terminal.close()
+            await terminal.close(detach=True)
         self.registry_lock.close()
         # Managers and workers are deliberately detached from the browser server.
 
@@ -738,6 +796,8 @@ async def supervisor_agent_delete(request):
         if task is None:
             raise ValueError('Unknown agent')
         run = c.run_for(entry['id'], task['id'])
+        if terminal_owner_path(run.dir, run.worktree).exists():
+            raise ValueError('Return and reconcile the interactive terminal before deleting this agent')
         terminal = c.terminals.get((entry['id'], task['id']))
         if terminal:
             await terminal.close()
@@ -1071,6 +1131,26 @@ async def native_action(request):
                 c.resume(key[0])  # Drain/reconcile the existing turn before yielding its locks.
         else:
             opened = run.state().get('interactive_session')
+            marker = terminal_owner_path(run.dir, run.worktree)
+            if marker.exists():
+                if terminal and terminal.mode == 'shell':
+                    raise ValueError('This agent has a worktree shell open')
+                session = TmuxSession.recover(run.dir, run.worktree)
+                if body.get('verified_no_writers') is not True:
+                    if terminal:
+                        await terminal.close()
+                        c.terminals.pop(key, None)
+                    else:
+                        await asyncio.to_thread(session.stop)
+                    return web.json_response({'ok': True, 'needs_verification': True,
+                                              'worktree': str(run.worktree)})
+                with ExitStack() as locks:
+                    locks.enter_context(locked(run.path('keeper.lock')))
+                    for path in dict.fromkeys((workspace_lock_path(run.dir, run.worktree), legacy_workspace_lock_path(run.dir, run.worktree))):
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        locks.enter_context(locked(path))
+                    session.reconcile(verified_no_writers=True)
+                terminal = None
             if terminal:
                 if terminal.mode == 'shell':
                     raise ValueError('This agent has a worktree shell open')
@@ -1139,7 +1219,7 @@ async def terminal_socket(request):
         if terminal and (terminal.mode == 'shell') != (mode == 'shell'):
             raise ValueError('Close the other terminal before switching modes')
         if terminal is None:
-            terminal = Terminal(run, c.shell, mode, c.home)
+            terminal = Terminal(run, c.shell, mode, c.home, c.use_tmux or terminal_owner_path(run.dir, run.worktree).exists())
             c.terminals[key] = terminal
         if terminal.ws and not terminal.ws.closed:
             if mode == 'shell' or request.query.get('takeover') != '1':
@@ -1203,9 +1283,9 @@ async def deploy_action(request):
     return web.json_response(result, status=202)
 
 
-def create_app(home):
+def create_app(home, use_tmux=False):
     app = web.Application(middlewares=[boundary], client_max_size=1024 * 1024)
-    app[APP_KEY] = Controller(home)
+    app[APP_KEY] = Controller(home, use_tmux)
     app.router.add_get('/', index)
     def file_handler(path):
         async def serve(request):
@@ -1254,10 +1334,15 @@ def main():
     parser = argparse.ArgumentParser(description='Local browser interface for agent-loop')
     parser.add_argument('--home', default=str(ROOT / '.agent-loop' / 'web'))
     parser.add_argument('--port', type=int, default=8765)
+    parser.add_argument('--tmux-terminal', action=argparse.BooleanOptionalAction, default=None,
+                        help='Enable or disable persistent agent terminals (enabled when tmux is installed)')
     args = parser.parse_args()
     if not (ASSETS / 'node_modules' / '@xterm' / 'xterm').exists():
         parser.error('Browser assets are missing. Run scripts/setup-supervise-web first.')
-    app = create_app(args.home)
+    tmux_available = bool(shutil.which('tmux'))
+    if args.tmux_terminal and not tmux_available:
+        parser.error('The experimental tmux terminal requires tmux on PATH.')
+    app = create_app(args.home, use_tmux=tmux_available if args.tmux_terminal is None else args.tmux_terminal)
     deploy.register(ROOT, args.home, args.port)
     print(f'Open http://127.0.0.1:{args.port} — local supervisor', flush=True)
     web.run_app(app, host='127.0.0.1', port=args.port, print=None)
