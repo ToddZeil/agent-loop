@@ -776,7 +776,7 @@ function addTask() {
   const options = document.createElement('section'); options.className = 'task-options'; row._options = options;
   options.innerHTML = `<h4>Agent ${String(taskNumber).padStart(2,'0')}</h4><label>Agent ID<input data-field="id" pattern="[a-z0-9](?:[a-z0-9]|-){0,60}" placeholder="Generated automatically"></label><label>Verification command (optional)<input data-field="check" placeholder="For example: npm test"></label><small class="muted">Leave empty to use supervisor review.</small><div class="form-row"><label>Fallback provider<select data-field="fallback"><option value="">Wait for quota reset</option><option>codex</option><option>claude</option><option>antigravity</option><option>muse</option></select></label><label>Fallback model<input data-field="fallback-model" placeholder="Provider default"></label></div>`;
   row.querySelector('.remove-task').onclick = () => { if ($('task-fields').children.length > 1) { options.remove(); row.remove(); updateAgentNames(); } else toast('Add at least one agent.', true); };
-  row.querySelectorAll('.subagent-option').forEach(label => options.append(label));
+  row.querySelectorAll('.subagent-option').forEach(label => { if (!label.querySelector('[data-field=allow-subagents]')) options.append(label); });
   $('task-fields').append(row); $('task-options').append(options);
   row.querySelector('[data-field=project]').onchange = event => {
     row.querySelector('[data-field=repo]').value = event.target.value;

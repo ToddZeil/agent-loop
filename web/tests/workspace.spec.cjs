@@ -948,6 +948,7 @@ test('subagents default on, attachments reach the goal, and conversation is sear
   const fixture=await (await request.get('/test-fixture')).json();
   await page.goto('/');
   await page.locator('#new-fleet').click();
+  await expect(page.locator('[data-field="allow-subagents"]')).toBeVisible();
   await expect(page.locator('[data-field="allow-subagents"]')).toBeChecked();
   await page.getByLabel('Repository root',{exact:true}).fill(fixture.repo);
   await page.getByLabel('Goal',{exact:true}).fill('Set app.py value to 2 and verify the result.');
