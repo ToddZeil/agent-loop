@@ -416,21 +416,68 @@ h1 { font-size: 22px; margin: 0; }
 #confirm-dialog .muted { font-size: 13px; line-height: 1.7; }
 #confirm-dialog .button.danger { border-color: #986447; }
 
-.changes-panel { overflow: auto; }
-.changes-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px; border-bottom: 1px solid var(--line); }
+/* Code review: file navigation and numbered diff rows. */
+.changes-panel { overflow: auto; --diff-add-bg: #428a4820; --diff-del-bg: #c5535320; --diff-add-text: #89d49a; --diff-del-text: #f0a09b; }
+[data-theme="light"] .changes-panel { --diff-add-bg: #e5f4e8; --diff-del-bg: #ffebe9; --diff-add-text: #236b35; --diff-del-text: #a52c2c; }
+.changes-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 18px; border-bottom: 1px solid var(--edge); }
 .changes-toolbar p { margin: 6px 0 0; }
-.changes-layout { display: grid; grid-template-columns: minmax(160px, 28%) minmax(0, 1fr); min-height: 300px; }
-.changes-files { border-right: 1px solid var(--line); padding: 8px; overflow-wrap: anywhere; }
-.change-file { width: 100%; text-align: left; display: flex; flex-direction: column; gap: 5px; padding: 10px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text); }
-.change-file:hover, .change-file.selected { background: var(--raised); border-color: var(--line); }
-.change-file small { color: var(--muted); }
-.changes-detail { min-width: 0; padding: 16px; }
-#changes-path { overflow-wrap: anywhere; }
-.changes-diff { font: 12px/1.65 ui-monospace, monospace; overflow: auto; tab-size: 4; max-height: 65vh; }
-.diff-added { color: #69bc7d; }
-.diff-removed { color: #db817c; }
-.diff-hunk { color: #72a9cc; }
-@media (max-width: 650px) { .changes-layout { grid-template-columns: 1fr; } .changes-files { border-right: 0; border-bottom: 1px solid var(--line); max-height: 180px; overflow: auto; } }
+.changes-actions, .changes-totals, .diff-controls { display: flex; align-items: center; gap: 10px; }
+.changes-totals { font: 600 12px ui-monospace, monospace; }
+.changes-layout { display: grid; grid-template-columns: minmax(165px, 23%) minmax(0, 1fr); min-height: 340px; }
+.changes-sidebar { border-right: 1px solid var(--edge); background: var(--panel-2); min-width: 0; }
+#changes-filter { margin: 12px 10px 4px; width: calc(100% - 20px); padding: 8px; font-size: 12px; background: var(--panel); }
+.changes-files { padding: 6px; overflow: auto; max-height: 65vh; }
+.change-file { width: 100%; text-align: left; display: grid; gap: 4px; padding: 10px; margin-bottom: 3px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--text); overflow-wrap: anywhere; }
+.change-file:hover { background: var(--panel); }
+.change-file.selected { background: var(--panel); border-color: var(--edge-strong); box-shadow: inset 3px 0 var(--accent); }
+.change-file-name { font: 600 12px ui-monospace, monospace; }
+.change-file-folder, .change-file small { color: var(--muted); font-size: 11px; }
+.change-new { color: var(--accent); }
+.changes-detail { min-width: 0; }
+.diff-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--edge); background: var(--panel-2); }
+#changes-path { overflow-wrap: anywhere; font: 600 12px ui-monospace, monospace; }
+.diff-controls select { width: auto; padding: 6px 26px 6px 8px; font-size: 11px; background: var(--panel); }
+#diff-wrap[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+#changes-warning { margin: 0; padding: 10px 16px; }
+.changes-diff { overflow: auto; max-height: 65vh; tab-size: 4; background: var(--panel); }
+.diff-table { width: 100%; border-collapse: collapse; font: 12px/1.8 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.diff-table th { position: sticky; top: 0; z-index: 1; background: var(--panel-2); text-align: left; font: 500 10px/2.8 -apple-system, BlinkMacSystemFont, sans-serif; color: var(--muted); padding: 0 10px; border-bottom: 1px solid var(--edge); }
+.diff-table .diff-number { width: 1%; min-width: 42px; padding: 0 10px; text-align: right; color: var(--muted); border-right: 1px solid var(--edge); user-select: none; white-space: nowrap; vertical-align: top; }
+.diff-table .diff-code { padding: 0 12px 0 8px; white-space: pre; vertical-align: top; }
+.diff-sign { display: inline-block; width: 20px; user-select: none; opacity: .75; }
+.diff-line.added, .diff-code.added, .diff-number.added { background: var(--diff-add-bg); }
+.diff-line.removed, .diff-code.removed, .diff-number.removed { background: var(--diff-del-bg); }
+.diff-line.added .diff-sign, .diff-code.added .diff-sign, .diff-added { color: var(--diff-add-text); }
+.diff-line.removed .diff-sign, .diff-code.removed .diff-sign, .diff-removed { color: var(--diff-del-text); }
+.diff-hunk td { padding: 7px 12px; background: color-mix(in srgb, #6f9dc5 12%, var(--panel)); color: #78a8d2; border-block: 1px solid var(--edge); white-space: pre-wrap; overflow-wrap: anywhere; }
+[data-theme="light"] .diff-hunk td { color: #315f88; }
+.diff-note td { padding: 3px 12px; color: var(--muted); font-style: italic; }
+.diff-table col.diff-gutter { width: 42px; }
+.diff-split { table-layout: fixed; }
+.diff-split col.diff-content { width: calc(50% - 42px); }
+.diff-split .diff-number { width: 42px; }
+.diff-split .diff-code { width: calc(50% - 42px); overflow-x: auto; }
+.diff-split td:nth-child(2), .diff-split th:first-child { border-right: 1px solid var(--edge-strong); }
+.diff-blank { background: var(--panel-2); }
+.wrap-lines .diff-code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.wrap-lines .diff-unified { table-layout: fixed; }
+.wrap-lines .diff-unified .diff-number { width: 42px; }
+.diff-patch { margin: 0; padding: 16px; font: 12px/1.8 ui-monospace, monospace; }
+.wrap-lines .diff-patch { white-space: pre-wrap; overflow-wrap: anywhere; }
+.diff-message, .changes-empty { padding: 24px 16px; color: var(--muted); }
+.diff-message strong { color: var(--text); }
+.diff-message p { margin: 8px 0 0; font-size: 12px; }
+@media (max-width: 650px) {
+  .changes-toolbar { align-items: flex-start; flex-wrap: wrap; }
+  .changes-layout { grid-template-columns: 1fr; }
+  .changes-sidebar { border-right: 0; border-bottom: 1px solid var(--edge); }
+  .changes-files { max-height: 160px; }
+  .change-file { padding: 8px 10px; }
+  .diff-toolbar { padding: 12px; }
+  .diff-table .diff-number { min-width: 32px; padding: 0 5px; }
+  .diff-controls { flex-wrap: wrap; }
+}
+
 
 /* ==========================================================================
    Visual polish layer: shared tokens, calmer surfaces, clearer hierarchy.

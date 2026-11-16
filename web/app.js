@@ -358,14 +358,99 @@ function renderConversation(data) {
   if(panel.dataset.content !== html) { panel.innerHTML=html; panel.dataset.content=html; }
 }
 let changesKey = '', changesPath = '', changesLoading = false, changesGeneration = 0;
+let changedFiles = [], currentDiff = null;
+$('diff-view').value = localStorage.getItem('loop-diff-view') || 'unified';
+if (!$('diff-view').value) $('diff-view').value = 'unified';
+$('diff-wrap').setAttribute('aria-pressed', String(localStorage.getItem('loop-diff-wrap') === 'true'));
+
+function parseDiff(patch) {
+  const rows = [];
+  let oldLine = 0, newLine = 0, inHunk = false;
+  for (const line of patch.split('\n')) {
+    const hunk = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$/);
+    if (hunk) {
+      oldLine = Number(hunk[1]); newLine = Number(hunk[3]); inHunk = true;
+      rows.push({kind:'hunk', text:line, old:oldLine, new:newLine});
+    } else if (inHunk && /^[ +\-]/.test(line)) {
+      const kind = line[0] === '+' ? 'added' : line[0] === '-' ? 'removed' : 'context';
+      rows.push({kind, text:line.slice(1), old:kind === 'added' ? '' : oldLine++, new:kind === 'removed' ? '' : newLine++});
+    } else if (inHunk && line.startsWith('\\')) {
+      rows.push({kind:'note', text:line});
+    }
+  }
+  return rows;
+}
+function diffCodeCell(row, side) {
+  if (!row) return '<td class="diff-number"></td><td class="diff-code diff-blank"></td>';
+  const sign = row.kind === 'added' ? '+' : row.kind === 'removed' ? '−' : ' ';
+  return `<td class="diff-number ${row.kind}">${row[side]}</td><td class="diff-code ${row.kind}"><span class="diff-sign" aria-hidden="true">${sign}</span><span class="diff-source">${escapeHTML(row.text)}</span></td>`;
+}
+function renderCodeDiff() {
+  const panel = $('changes-diff');
+  panel.classList.toggle('wrap-lines', $('diff-wrap').getAttribute('aria-pressed') === 'true');
+  if (!currentDiff) return;
+  const view = $('diff-view').value, key = JSON.stringify([currentDiff.path, currentDiff.diff, view]);
+  if (panel.dataset.content === key) return;
+  panel.dataset.content = key;
+  if (view === 'patch') { panel.innerHTML = `<pre class="diff-patch">${escapeHTML(currentDiff.diff || 'Empty file.')}</pre>`; return; }
+  const rows = parseDiff(currentDiff.diff), split = view === 'split';
+  if (!rows.length) {
+    const binary = /(?:Binary files |GIT binary patch)/.test(currentDiff.diff);
+    panel.innerHTML = `<div class="diff-message"><strong>${binary ? 'Binary file' : currentDiff.diff ? 'File metadata changed' : 'Empty file'}</strong><p>${binary ? 'A text comparison is unavailable for this file.' : 'Choose Raw patch to inspect the file details.'}</p></div>`;
+    return;
+  }
+  let html = `<table class="diff-table ${split ? 'diff-split' : 'diff-unified'}" aria-label="${split ? 'Side by side' : 'Unified'} code changes"><colgroup>${split ? '<col class="diff-gutter"><col class="diff-content"><col class="diff-gutter"><col class="diff-content">' : '<col class="diff-gutter"><col class="diff-gutter"><col>'}</colgroup><thead><tr>${split ? '<th colspan="2">Before</th><th colspan="2">After</th>' : '<th class="diff-number">Old</th><th class="diff-number">New</th><th>Code changes</th>'}</tr></thead><tbody>`;
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    if (row.kind === 'hunk' || row.kind === 'note') {
+      html += `<tr class="diff-${row.kind}"><td colspan="${split ? 4 : 3}">${escapeHTML(row.text)}</td></tr>`;
+    } else if (!split) {
+      const sign = row.kind === 'added' ? '+' : row.kind === 'removed' ? '−' : ' ';
+      html += `<tr class="diff-line ${row.kind}"><td class="diff-number">${row.old}</td><td class="diff-number">${row.new}</td><td class="diff-code"><span class="diff-sign" aria-hidden="true">${sign}</span><span class="diff-source">${escapeHTML(row.text)}</span></td></tr>`;
+    } else if (row.kind === 'context') {
+      html += `<tr class="diff-line">${diffCodeCell(row,'old')}${diffCodeCell(row,'new')}</tr>`;
+    } else {
+      const removed = [], added = [];
+      while (i < rows.length && rows[i].kind === 'removed') removed.push(rows[i++]);
+      while (i < rows.length && rows[i].kind === 'added') added.push(rows[i++]);
+      i--;
+      for (let j = 0; j < Math.max(removed.length, added.length); j++) html += `<tr class="diff-line">${diffCodeCell(removed[j],'old')}${diffCodeCell(added[j],'new')}</tr>`;
+    }
+  }
+  panel.innerHTML = html + '</tbody></table>';
+}
+function renderChangedFiles() {
+  const query = $('changes-filter').value.toLowerCase(), list = $('changes-files');
+  const visible = changedFiles.filter(f => f.path.toLowerCase().includes(query));
+  const html = visible.map(f => {
+    const parts = f.path.split('/'), name = parts.pop(), folder = parts.join('/');
+    return `<button class="change-file ${f.path === changesPath ? 'selected' : ''}" data-path="${escapeHTML(f.path)}" aria-pressed="${f.path === changesPath}" title="${escapeHTML(f.path)}"><span class="change-file-name">${escapeHTML(name)}</span>${folder ? `<span class="change-file-folder">${escapeHTML(folder)}</span>` : ''}<small>${f.status === 'New' ? '<span class="change-new">New file</span>' : f.added === null ? 'Binary' : `<span class="diff-added">+${f.added}</span> <span class="diff-removed">−${f.removed}</span>`}</small></button>`;
+  }).join('') || `<p class="changes-empty">${changedFiles.length ? 'No matching files.' : 'No file changes yet.'}</p>`;
+  if (list.dataset.content !== html) { list.innerHTML = html; list.dataset.content = html; }
+  list.querySelectorAll('[data-path]').forEach(b => b.onclick = () => {
+    if (changesPath === b.dataset.path) return;
+    changesPath = b.dataset.path; changesGeneration++; changesLoading = false; currentDiff = null;
+    $('changes-path').textContent = changesPath;
+    $('changes-diff').textContent = 'Loading diff…'; delete $('changes-diff').dataset.content;
+    $('changes-warning').hidden = true; renderChangedFiles(); loadChanges();
+  });
+}
+$('changes-filter').oninput = renderChangedFiles;
+$('diff-view').onchange = () => {localStorage.setItem('loop-diff-view', $('diff-view').value); renderCodeDiff();};
+$('diff-wrap').onclick = () => {
+  const wrap = $('diff-wrap').getAttribute('aria-pressed') !== 'true';
+  $('diff-wrap').setAttribute('aria-pressed', String(wrap)); localStorage.setItem('loop-diff-wrap', String(wrap)); renderCodeDiff();
+};
 async function loadChanges() {
   if (!selectedTask || !selectedFleet || activeTab !== 'changes') return;
   const key = taskURL();
   if (changesKey !== key) {
     changesKey = key; changesPath = ''; changesLoading = false; changesGeneration++;
-    $('changes-files').textContent = 'Loading changes…';
-    $('changes-diff').replaceChildren(); $('changes-path').textContent = 'Select a file to inspect its diff.';
-    $('changes-warning').hidden = true;
+    changedFiles = []; currentDiff = null; $('changes-filter').value = '';
+    $('changes-files').textContent = 'Loading changes…'; delete $('changes-files').dataset.content;
+    $('changes-diff').replaceChildren(); delete $('changes-diff').dataset.content;
+    $('changes-path').textContent = 'Select a file to inspect its diff.';
+    $('changes-totals').replaceChildren(); $('changes-warning').hidden = true;
   }
   if (changesLoading) return;
   changesLoading = true;
@@ -373,29 +458,26 @@ async function loadChanges() {
   try {
     const data = await api(key + '/changes');
     if (key !== taskURL() || generation !== changesGeneration) return;
-    const files = data.files;
-    $('changes-summary').textContent = `${files.length} changed file${files.length === 1 ? '' : 's'} · since agent started (${data.base.slice(0,8)}) · includes uncommitted edits`;
-    const list = $('changes-files');
-    const html = files.map(f => `<button class="change-file ${f.path === changesPath ? 'selected' : ''}" data-path="${escapeHTML(f.path)}"><span>${escapeHTML(f.path)}</span><small>${f.status === 'New' ? 'New file' : f.added === null ? 'Binary' : `<span class="diff-added">+${f.added}</span> <span class="diff-removed">−${f.removed}</span>`}</small></button>`).join('') || '<p class="muted">No file changes yet.</p>';
-    if (list.innerHTML !== html) list.innerHTML = html;
-    list.querySelectorAll('[data-path]').forEach(b => b.onclick = () => {
-      changesPath = b.dataset.path; changesGeneration++; changesLoading = false;
-      $('changes-path').textContent = changesPath; $('changes-diff').textContent = 'Loading diff…';
-      $('changes-warning').hidden = true; loadChanges();
-    });
-    if (!files.some(f => f.path === changesPath)) changesPath = files[0]?.path || '';
-    if (!changesPath) {
-      $('changes-path').textContent = 'No file changes yet.'; $('changes-diff').replaceChildren(); $('changes-warning').hidden = true; return;
+    changedFiles = data.files;
+    $('changes-summary').textContent = `${changedFiles.length} changed file${changedFiles.length === 1 ? '' : 's'} · since ${data.base.slice(0,8)} · includes uncommitted edits`;
+    const added = changedFiles.reduce((n,f) => n + (f.added || 0),0), removed = changedFiles.reduce((n,f) => n + (f.removed || 0),0);
+    $('changes-totals').innerHTML = `<span class="diff-added">+${added}</span><span class="diff-removed">−${removed}</span>`;
+    $('changes-totals').title = 'Line totals for tracked files; new and binary files are excluded';
+    if (!changedFiles.some(f => f.path === changesPath)) {
+      changesPath = changedFiles[0]?.path || ''; currentDiff = null;
+      $('changes-diff').replaceChildren(); delete $('changes-diff').dataset.content;
     }
-    list.querySelectorAll('[data-path]').forEach(b => b.classList.toggle('selected', b.dataset.path === changesPath));
+    renderChangedFiles();
+    if (!changesPath) {
+      $('changes-path').textContent = 'No file changes yet.'; $('changes-warning').hidden = true; return;
+    }
     const path = changesPath;
     const result = await api(key + '/changes?path=' + encodeURIComponent(path));
     if (key !== taskURL() || generation !== changesGeneration || path !== changesPath) return;
     $('changes-path').textContent = path;
     $('changes-warning').hidden = !result.truncated;
     $('changes-warning').textContent = 'Large diff: showing the first 256 KB.';
-    const htmlDiff = result.diff.split('\n').map(line => `<span class="${line.startsWith('+') ? 'diff-added' : line.startsWith('-') ? 'diff-removed' : line.startsWith('@@') ? 'diff-hunk' : ''}">${escapeHTML(line)}</span>`).join('\n');
-    if ($('changes-diff').innerHTML !== htmlDiff) $('changes-diff').innerHTML = htmlDiff;
+    currentDiff = result; renderCodeDiff();
   } catch(e) {
     if (key === taskURL() && generation === changesGeneration) {
       $('changes-warning').hidden = false; $('changes-warning').textContent = e.message;
