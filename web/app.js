@@ -134,6 +134,7 @@ function render() {
   $('stat-active').textContent = tasks.filter(t => t.state === 'working' || t.state === 'verifying').length;
   $('stat-waiting').textContent = tasks.filter(t => ['waiting','blocked'].includes(t.state)).length;
   $('stat-done').textContent = tasks.filter(t => t.state === 'complete').length;
+  $('stat-waiting').closest('div').classList.toggle('has-items', Number($('stat-waiting').textContent) > 0);
   renderTokenMonitor(fleet);
   $('worker-count').textContent = String(tasks.length);
   document.body.classList.toggle('no-agents', tasks.length === 0);
@@ -326,7 +327,7 @@ function conversationItems(output) {
       else if(e.type === 'turn.completed') add({kind:'status',text:'Turn completed'});
       else if(e.type === 'error' || e.error) add({kind:'error',text:typeof e.message === 'string' ? e.message : JSON.stringify(e.error || e)});
       else if(typeof e.message === 'string') add({kind:'message',text:e.message});
-    } catch { add({kind:'message',text:line}); }
+    } catch { if(!/^\s*[\[{]/.test(line)) add({kind:'message',text:line}); /* truncated JSON stays in the Run log */ }
   }
   return items;
 }
@@ -421,7 +422,23 @@ async function fleetAction(action) {
   catch(e) { toast(e.message, true); render(); }
 }
 $('worker-search').oninput = () => render();
-$('worker-filter').onchange = render;
+$('worker-filter').onchange = () => { syncStatTiles(); render(); };
+// Summary tiles double as one-click filters for the agent list.
+function syncStatTiles() {
+  document.querySelectorAll('.stats>div[data-filter]').forEach(tile => {
+    const on = $('worker-filter').value === tile.dataset.filter && tile.dataset.filter !== '';
+    tile.classList.toggle('is-active', on); tile.setAttribute('aria-pressed', String(on));
+  });
+}
+document.querySelectorAll('.stats>div').forEach((tile, i) => {
+  const filter = ['', 'working', 'attention', 'complete'][i] || '';
+  tile.dataset.filter = filter;
+  if (!filter) return;
+  tile.tabIndex = 0; tile.setAttribute('role', 'button'); tile.title = 'Show only these agents · click again to clear';
+  const toggle = () => { $('worker-filter').value = $('worker-filter').value === filter ? '' : filter; syncStatTiles(); render(); };
+  tile.addEventListener('click', toggle);
+  tile.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
+});
 $('resume').onclick = () => fleetAction('resume'); $('stop').onclick = () => fleetAction('stop');
 $('deploy-agent').onclick=async()=>{
   const button=$('deploy-agent');button.disabled=true;
@@ -676,7 +693,7 @@ function applySupervisor(supervisor) {
 }
 function renderArchived(tasks) {
   $('removed-agents').hidden = tasks.length === 0;
-  $('archived-agents').innerHTML = tasks.length ? tasks.map(t=>`<button class="button quiet" data-restore="${escapeHTML(t.id)}">↶ ${escapeHTML(agentName(t))}</button><button class="button small danger" data-delete="${escapeHTML(t.id)}" >Delete &amp; clean up ${escapeHTML(agentName(t))}</button>`).join('') : '<small class="muted">None</small>';
+  $('archived-agents').innerHTML = tasks.length ? tasks.map(t=>`<div class="archived-row"><button class="button quiet" data-restore="${escapeHTML(t.id)}" title="Restore ${escapeHTML(agentName(t))}"><span class="archived-name">${escapeHTML(agentName(t))}</span><span class="archived-restore">Restore</span></button><button class="archived-delete" data-delete="${escapeHTML(t.id)}" aria-label="Delete &amp; clean up ${escapeHTML(agentName(t))}" title="Delete &amp; clean up">Delete</button></div>`).join('') : '<small class="muted">None</small>';
   $('archived-agents').querySelectorAll('[data-delete]').forEach(button => button.onclick = () => deleteAgent(button.dataset.delete));
   $('archived-agents').querySelectorAll('[data-restore]').forEach(button=>button.onclick=async()=>{
     try { await api(`/supervisor/agents/${encodeURIComponent(button.dataset.restore)}/restore`,{}); await refresh(); toast('Agent restored.'); } catch(e) { toast(e.message,true); }
@@ -849,4 +866,18 @@ document.addEventListener('click', event => {
   $('note-form').addEventListener('submit', event => { if (!note.value.trim()) { event.stopImmediatePropagation(); event.preventDefault(); note.focus(); } }, true);
   new MutationObserver(sync).observe(note, {attributes: true, attributeFilter: ['disabled']});
   setInterval(sync, 500); sync();
+})();
+
+// Always-visible connection state in the top bar (the full text lives in Settings).
+(() => {
+  const source = $('connection'), badge = $('bar-status');
+  if (!source || !badge) return;
+  const sync = () => {
+    const text = source.textContent.trim();
+    const state = /^Live|^Connected/.test(text) ? 'ok' : /interrupted/i.test(text) ? 'error' : 'pending';
+    badge.dataset.state = state; badge.title = text;
+    badge.querySelector('.bar-status-text').textContent = state === 'ok' ? 'Live' : state === 'error' ? 'Offline' : 'Connecting';
+  };
+  new MutationObserver(sync).observe(source, {childList: true, characterData: true, subtree: true});
+  sync();
 })();

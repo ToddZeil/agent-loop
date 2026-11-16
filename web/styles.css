@@ -431,3 +431,174 @@ h1 { font-size: 22px; margin: 0; }
 .diff-removed { color: #db817c; }
 .diff-hunk { color: #72a9cc; }
 @media (max-width: 650px) { .changes-layout { grid-template-columns: 1fr; } .changes-files { border-right: 0; border-bottom: 1px solid var(--line); max-height: 180px; overflow: auto; } }
+
+/* ==========================================================================
+   Visual polish layer: shared tokens, calmer surfaces, clearer hierarchy.
+   Later rules intentionally win over the earlier "pass" rules above.
+   ========================================================================== */
+:root {
+  --panel: #171d19; --panel-2: #1d2621; --edge: #2c3831; --edge-strong: #4a5d50;
+  --ring: #c4ef9a; --accent-soft: #c4ef9a1c; --warn-soft: #edbe7c1f;
+  --shadow-sm: 0 1px 2px #0006; --shadow-md: 0 10px 28px #0007;
+  --radius: 10px;
+}
+:root[data-theme="light"] {
+  --panel: #fff; --panel-2: #f1f5ef; --edge: #d4ddd3; --edge-strong: #9db39c;
+  --ring: #2f6a2a; --accent-soft: #386d2e1a; --warn-soft: #87520d1a;
+  --shadow-sm: 0 1px 2px #1c2f2014; --shadow-md: 0 10px 28px #1c2f2024;
+}
+body { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+
+/* Controls */
+.button { border-radius: 8px; box-shadow: var(--shadow-sm); transition: background .15s, border-color .15s, transform .08s, box-shadow .15s; }
+.button:active:not(:disabled) { transform: translateY(1px); box-shadow: none; }
+.button.quiet, .button.quiet:hover { box-shadow: none; }
+.icon { width: 14px; height: 14px; flex-shrink: 0; }
+input:focus, select:focus, textarea:focus { border-color: var(--ring); box-shadow: 0 0 0 3px var(--accent-soft), 0 0 0 1px var(--ring); }
+[tabindex="0"]:focus-visible, button:focus-visible, a:focus-visible, summary:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+
+/* Top bar */
+.workspace-bar { background: color-mix(in srgb, var(--bg) 86%, transparent); backdrop-filter: saturate(1.4) blur(10px); border-bottom-color: var(--edge); }
+[data-theme="light"] .workspace-bar { background: color-mix(in srgb, #edf2eb 88%, transparent); }
+.workspace-bar-actions { gap: 12px; }
+.bar-status { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); padding: 5px 10px; border-radius: 999px; border: 1px solid var(--edge); background: var(--panel); }
+.bar-status .dot { width: 7px; height: 7px; background: var(--muted); }
+.bar-status[data-state="ok"] .dot { background: #5fd07a; box-shadow: 0 0 0 3px #5fd07a2e; }
+.bar-status[data-state="pending"] .dot { background: var(--orange); animation: pulse 1.4s ease-in-out infinite; }
+.bar-status[data-state="error"] { color: #f1b098; border-color: #986447; }
+.bar-status[data-state="error"] .dot { background: #e0775a; }
+@media(max-width:650px) { .bar-status-text { display: none; } .bar-status { padding: 8px; } }
+
+/* Settings menu */
+.settings-dropdown { width: 290px; border-radius: 12px; background: var(--panel); border-color: var(--edge); box-shadow: var(--shadow-md); max-height: calc(100dvh - 90px); overflow: auto; }
+[data-theme="light"] .settings-dropdown { background: var(--panel); }
+.settings-dropdown > .button { padding: 10px 12px; border-radius: 8px; }
+.settings-dropdown > .button:hover { background: var(--panel-2); }
+#removed-agents { margin-top: 8px; padding-top: 10px; border-top: 1px solid var(--edge); }
+.archived-agents { max-height: 190px; overflow: auto; gap: 2px; }
+.archived-row { display: flex; align-items: center; gap: 4px; }
+.archived-row .button.quiet { flex: 1; min-width: 0; padding: 7px 8px; font-size: 12px; gap: 8px; }
+.archived-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.archived-delete { flex-shrink: 0; border: 0; background: transparent; color: var(--muted); font-size: 11px; padding: 6px 8px; border-radius: 6px; }
+.archived-delete:hover, .archived-delete:focus-visible { color: #e4b59f; background: #e4b59f1c; }
+.settings-dropdown .sidebar-bottom { border-top: 1px solid var(--edge); margin-top: 8px; padding: 12px 6px 2px; font-size: 11px; }
+#connection, #keeper-status, #ui-build { font-size: 11px; }
+
+/* Page header and summary tiles */
+header { align-items: flex-end; }
+h1 { font-size: 24px; letter-spacing: -.6px; }
+.stats { gap: 10px; }
+:root .stats>div { background: var(--panel); border-color: var(--edge); border-radius: var(--radius); padding: 12px 16px; box-shadow: var(--shadow-sm); transition: border-color .15s, background .15s, transform .12s; }
+.stats>div[role="button"] { cursor: pointer; }
+.stats>div[role="button"]:hover { border-color: var(--edge-strong); transform: translateY(-1px); }
+.stats>div.is-active { border-color: var(--ring); background: var(--accent-soft); }
+.stats>div.has-items { border-color: #8c6a33; background: var(--warn-soft); }
+.stats>div.has-items strong { color: var(--orange); }
+.stats strong { font-size: 22px; font-weight: 600; }
+.stats .stat-label { color: var(--muted); }
+.token-monitor>details>summary { padding: 6px 2px; }
+.token-monitor>details>summary:hover { color: var(--text); }
+.token-panel, .agent-token-grid>div { border-color: var(--edge); background: var(--panel); border-radius: var(--radius); }
+.usage-table th, .usage-table td, .usage-table td small { font-size: 11px; }
+.agents-heading h2 { font-size: 15px; }
+
+/* Agent cards: name on its own line, status beside the repo, goal below. */
+.workers { gap: 10px; }
+:root .worker-card { height: auto; min-height: 104px; padding: 0; border-radius: var(--radius); background: var(--panel); border-color: var(--edge); box-shadow: var(--shadow-sm); transition: border-color .15s, background .15s, transform .12s; }
+:root .worker-card:hover { background: var(--panel-2); border-color: var(--edge-strong); }
+:root .worker-card.selected { background: var(--panel-2); border-color: var(--ring); box-shadow: inset 3px 0 var(--ring), var(--shadow-sm); }
+.worker-select { height: auto; overflow: visible; display: grid; grid-template-columns: minmax(0,1fr) auto; grid-template-areas: "name name" "repo status" "goal goal"; column-gap: 8px; row-gap: 6px; align-items: center; padding: 12px 14px 12px 14px; border-radius: var(--radius); }
+.worker-top { display: contents; }
+.worker-top strong { grid-area: name; flex: none; padding-right: 36px; font-size: 14px; line-height: 1.35; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.worker-top .pill { grid-area: status; justify-self: end; }
+.worker-card .repo { grid-area: repo; margin: 0; }
+.worker-card .goal { grid-area: goal; margin-top: 2px; line-height: 1.45; color: var(--muted); }
+:root .worker-card .goal { color: var(--muted); }
+.agent-card-menu { top: 8px; right: 8px; }
+.agent-card-menu summary { width: 30px; height: 30px; border-color: transparent; background: transparent; color: var(--muted); font-size: 18px; transition: background .15s, color .15s, border-color .15s; }
+.worker-card:hover .agent-card-menu summary, .agent-card-menu[open] summary, .agent-card-menu summary:focus-visible { border-color: var(--edge); background: var(--panel); color: var(--text); }
+.agent-card-actions { top: 34px; border-radius: 10px; background: var(--panel); border-color: var(--edge); box-shadow: var(--shadow-md); }
+.agent-card-actions button { border-radius: 6px; }
+.worker-card.selected .worker-top strong { color: var(--accent); }
+
+/* Status pills: a coloured dot tells state at a glance without relying on hue alone. */
+.pill { gap: 6px; font-weight: 500; }
+.pill::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: .85; }
+.pill.working::before, .pill.verifying::before { margin-right: 0; }
+.pill:empty { display: none; }
+
+/* Inspector */
+:root .inspector { background: var(--panel); border-color: var(--edge); border-radius: 14px; box-shadow: var(--shadow-sm); }
+.inspector-heading { padding: 16px 20px 12px; }
+.inspector-heading h2 { font-size: 18px; }
+.agent-settings { border-top-color: var(--edge); }
+.agent-settings>summary { padding: 11px 20px; transition: color .15s; }
+.agent-settings>summary:hover { color: var(--text); }
+:root .tabs { background: transparent; border-block-color: var(--edge); gap: 22px; }
+.tab { position: relative; border-bottom-width: 2px; transition: color .15s, border-color .15s; }
+.tab:hover:not(.active) { border-bottom-color: var(--edge-strong); }
+.worker-output-heading { display: flex; padding: 10px 20px 0; }
+.worker-output-heading strong { font-size: 12px; color: var(--muted); font-weight: 500; }
+.worker-output-heading .muted { font-size: 11px; }
+.native-help { display: block; padding: 9px 18px; font-size: 11px; color: var(--muted); background: #0f1411; border-top-color: #28392a; }
+:root .conversation { background: var(--panel); }
+.conversation-text { line-height: 1.7; }
+:root .user-message { border-radius: 14px 14px 4px 14px; }
+.command-card { border-radius: 10px; }
+.command-card summary:hover { background: #ffffff08; }
+.note-form { box-shadow: none; border-top-color: var(--edge); background: var(--panel-2); }
+[data-theme="light"] .note-form { background: var(--panel-2); }
+.note-form textarea { border-radius: 10px; }
+.note-form>div { align-items: flex-end; }
+
+/* Agent settings: reversible and destructive actions live apart. */
+.settings-actions { padding: 10px 20px 14px; }
+.danger-zone { flex-basis: 100%; margin-top: 6px; padding: 12px 14px; border: 1px solid var(--edge); border-radius: 10px; background: var(--panel-2); display: grid; gap: 8px; }
+.danger-title { font-size: 11px; font-weight: 600; letter-spacing: .4px; text-transform: uppercase; color: var(--muted); }
+.danger-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.button.danger { border-color: #7a5642; background: transparent; }
+.button.danger:hover:not(:disabled) { background: #e4b59f18; border-color: #b27a5e; }
+[data-theme="light"] .button.danger { border-color: #d3a898; background: transparent; }
+
+/* Empty state, dialogs, toast */
+:root .empty { border-radius: 16px; }
+.empty-icon { border-radius: 16px; }
+dialog { border-radius: 16px; border-color: var(--edge-strong); background: var(--panel); }
+[data-theme="light"] dialog { background: var(--panel); }
+.dialog-head h2 { font-size: 22px; }
+.dialog-foot { border-top-color: var(--edge); }
+#toast { border-radius: 10px; box-shadow: var(--shadow-md); }
+
+/* Narrow screens: keep tab overflow discoverable. */
+@media(max-width:650px) {
+  .tabs { -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent); }
+  .worker-select { padding: 12px; }
+  h1 { font-size: 21px; }
+  .stats strong { font-size: 19px; }
+}
+@media(prefers-reduced-motion:reduce) { .bar-status .dot, .stats>div, .worker-card, .button { animation: none !important; transition: none !important; } }
+
+/* Polish follow-ups from visual review. */
+.workspace-bar .button { white-space: nowrap; }
+.token-monitor strong { font-size: 12px; }
+.agent-settings { max-height: min(46vh, 440px); }
+@media(max-width:650px) {
+  header { align-items: flex-start; }
+  .workspace-bar-actions .button { padding: 9px 10px; }
+  .agent-settings { max-height: 60vh; }
+}
+
+/* Uniform card height keeps the list scannable; the goal clamps to two lines. */
+:root .worker-card { height: 112px; min-height: 0; }
+.worker-select { height: 100%; overflow: hidden; align-content: center; }
+.settings-dropdown { width: min(290px, calc(100vw - 28px)); }
+@media(max-width:420px) {
+  .workspace-bar { padding: 10px 12px; gap: 8px; }
+  .workspace-bar-actions { gap: 6px; }
+  .brand { font-size: 21px; padding: 0; }
+  .brand-icon { width: 25px; height: 25px; font-size: 21px; }
+  .bar-status { display: none; }
+  .workspace-bar-actions .button { padding: 9px 9px; gap: 5px; }
+}
+.archived-row .button.quiet { justify-content: space-between; }
+.archived-restore { flex-shrink: 0; font-size: 11px; color: var(--accent); font-weight: 600; }

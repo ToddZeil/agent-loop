@@ -14,7 +14,7 @@ test('tmux agent survives browser reload and requires verified return', async ({
   await page.getByLabel('Agent ID',{exact:true}).fill('tmux-browser');
   await page.getByLabel('Repository root',{exact:true}).fill(fixture.repo);
   await page.getByLabel('Goal',{exact:true}).fill('Verify terminal recovery.');
-  await page.getByRole('button',{name:'Add agents',exact:true}).click();
+  await page.locator('#create-form button[name="save"]').click();
   await page.getByRole('tab',{name:'Agent terminal',exact:true}).click();
   await page.locator('#open-native').click();
   await expect(page.locator('#native-status')).toContainText('Connected',{timeout:20000});
@@ -44,7 +44,7 @@ test('one supervisor: add an agent, use a real terminal, send direction, and com
   await page.getByLabel('Repository root',{exact:true}).fill(fixture.repo);
   await page.getByLabel('Goal',{exact:true}).fill('Set app.py value to 2.');
   await page.getByLabel('Verification command (optional)',{exact:true}).fill(fixture.acceptance);
-  await page.getByRole('button',{name:'Add agents',exact:true}).click();
+  await page.locator('#create-form button[name="save"]').click();
   await expect(page.locator('#title')).toHaveText('Agent workspace');
   await expect(page.locator('#stat-total')).toHaveText('1');
   await expect(page.locator('#task-status')).toHaveText('ready');
@@ -99,7 +99,7 @@ test('add another agent to the running supervisor through advanced manifest; mob
   await optionalSettings(page);
   await optionalSettings(page);
   await page.locator('textarea[name="manifest"]').fill(JSON.stringify({tasks:[{id:'manifest-worker',repo:fixture.repo,goal:'Set value to 2',acceptance:[fixture.acceptance]}]}));
-  await page.getByRole('button',{name:'Add agents',exact:true}).click();
+  await page.locator('#create-form button[name="save"]').click();
   await expect(page.locator('#task-title')).toHaveText('manifest-worker');
   await expect(page.locator('#stat-total')).toHaveText('2');
   expect(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth)).toBe(false);
@@ -129,7 +129,7 @@ test('scan repositories, choose one, persist subagent toggle, and remove/restore
   await page.getByLabel('Goal',{exact:true}).fill('Set value to 2');
   await page.getByLabel('Verification command (optional)',{exact:true}).fill(fixture.acceptance);
   await page.locator('[data-field="allow-subagents"]').check();
-  await page.getByRole('button',{name:'Add agents',exact:true}).click();
+  await page.locator('#create-form button[name="save"]').click();
   await expect(page.locator('#task-title')).toHaveText('selected-repo');
   await agentSettings(page);
   await expect(page.locator('#allow-subagents')).toBeChecked();
@@ -215,7 +215,7 @@ test('tile options delete a working agent while the supervisor and other agents 
   await expect(page.locator('#task-status')).toHaveText('working', {timeout:15000});
   await page.locator('[data-task="menu-keep"]').click();
   const card = page.locator('[data-task="menu-delete"]');
-  expect((await card.boundingBox()).height).toBe(100);
+  expect((await card.boundingBox()).height).toBe(112);
   await card.locator('summary').click();
   await expect(page.locator('#task-title')).toHaveText('menu-keep');
   await expect(card.getByRole('button', {name:'Delete & clean up',exact:true})).toBeEnabled();
@@ -407,7 +407,7 @@ test('effort is selectable for new and existing agents and supervisor; parallel 
   await page.getByLabel('Worker effort',{exact:true}).selectOption('xhigh');
   await page.getByLabel('Repository root',{exact:true}).fill(fixture.repo);
   await page.getByLabel('Goal',{exact:true}).fill('Verify effort controls.');
-  await page.getByRole('button',{name:'Add agents',exact:true}).click();
+  await page.locator('#create-form button[name="save"]').click();
   await agentSettings(page);
   await expect(page.locator('#agent-effort')).toHaveValue('xhigh');
   await page.locator('#agent-effort').selectOption('low');
@@ -438,7 +438,7 @@ test('open tabs report their UI revision and offer safe reload when files change
   await page.locator('#new-fleet').click();
   await page.getByLabel('Repository root',{exact:true}).fill(fixture.repo);
   await page.getByLabel('Goal',{exact:true}).fill('Verify interface reload.');
-  await page.getByRole('button',{name:'Add agents',exact:true}).click();
+  await page.locator('#create-form button[name="save"]').click();
   await expect(page.locator('#ui-build')).toHaveText(/^UI [a-f0-9]{10}$/);
   await expect(page.locator('#ui-update')).toBeHidden();
   const url=await page.locator('script[src*="app.js"]').getAttribute('src');
@@ -468,7 +468,7 @@ test('desktop opens directly to a readable conversation with its composer in vie
   await page.locator('#add-task').click();
   await page.getByLabel('Repository root',{exact:true}).nth(1).fill(fixture.secondRepo);
   await page.getByLabel('Goal',{exact:true}).nth(1).fill('Review a second project.');
-  await page.getByRole('button',{name:'Add agents',exact:true}).click();
+  await page.locator('#create-form button[name="save"]').click();
   await expect(page.locator('#create-dialog')).toBeHidden();
   await expect(page.locator('#worker-terminal-output')).toContainText('Ready for design review.');
   await expect(page.getByRole('tab',{name:'Conversation',exact:true})).toHaveAttribute('aria-selected','true');
@@ -649,7 +649,7 @@ test('actual interactive terminal supports direct typing, reconnect, and other s
   await page.locator('#new-fleet').click();
   await page.getByLabel('Repository root',{exact:true}).fill(fixture.repo);
   await page.getByLabel('Goal',{exact:true}).fill('Set value to 2 while another agent is interactive.');
-  await page.getByRole('button',{name:'Add agents',exact:true}).click();
+  await page.locator('#create-form button[name="save"]').click();
   await expect(page.locator('#create-dialog')).toBeHidden();
   await expect(page.locator('#task-status')).toHaveText('complete',{timeout:20000});
   await page.locator(`[data-task="${nativeAgent}"]`).click();
@@ -730,7 +730,7 @@ test('goal names stay unique, update with edits, and respect custom IDs', async 
   await expect(page.locator('.agent-name-preview').nth(1)).toHaveText('Name: simplify-cafe-navigation');
   await page.getByLabel('Repository root',{exact:true}).first().fill(fixture.repo);
   await page.getByLabel('Repository root',{exact:true}).nth(1).fill(fixture.secondRepo);
-  await page.getByRole('button',{name:'Add agents',exact:true}).click();
+  await page.locator('#create-form button[name="save"]').click();
   await expect(page.locator('#create-dialog')).toBeHidden();
   await expect(page.locator('#task-title')).toHaveText('custom-navigation');
   await page.getByLabel('Find agents',{exact:true}).fill('café navigation');
