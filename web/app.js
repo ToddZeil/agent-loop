@@ -10,6 +10,12 @@ let activeTab = 'terminal', refreshing = false, taskNumber = 0;
 let savedProjects = [], savedFolders = [];
 let terminal = null, fit = null, socket = null, terminalKey = null, toastTimer;
 let terminalMode = null, nativeAutoAttach = null, nativeReconnectAttempts = 0, nativeReturning = false, nativeTakeover = null;
+// Full ANSI palette tuned to the app: readable on the always-dark terminal canvas in both UI themes.
+const TERMINAL_THEME = {
+  background:'#0b0e0c', foreground:'#e1e8e3', cursor:'#7ddc9d', cursorAccent:'#0b0e0c', selectionBackground:'#7ddc9d33',
+  black:'#2a3330', red:'#f28b7a', green:'#7ddc9d', yellow:'#f2c26b', blue:'#7db8ff', magenta:'#d6a2f0', cyan:'#6fd6e0', white:'#c9d3cc',
+  brightBlack:'#6b7872', brightRed:'#ffa99b', brightGreen:'#a3f0b9', brightYellow:'#ffd98f', brightBlue:'#a6cfff', brightMagenta:'#e6c2f7', brightCyan:'#9be8ef', brightWhite:'#f4f8f5'
+};
 function toast(message, error = false) {
   $('toast').textContent = message; $('toast').classList.toggle('error', error); $('toast').hidden = false;
   clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').hidden = true, error ? 8000 : 4000);
@@ -595,7 +601,7 @@ async function connectTerminal(mode='shell',takeover=false) {
   terminalMode=mode;
   const mount=mode === 'agent' ? $('native-terminal') : $('terminal'); mount.hidden=false;
   if(mode === 'agent') $('native-placeholder').hidden=true;
-  terminal = new Terminal({cursorBlink:true,fontFamily:'Menlo, ui-monospace, monospace',fontSize:12,scrollback:3000,theme:{background:'#0b0e0c',foreground:'#d2e0ce',cursor:'#c5f47b',selectionBackground:'#5b784755'}});
+  terminal = new Terminal({cursorBlink:true,fontFamily:'Menlo, ui-monospace, monospace',fontSize:12,scrollback:3000,minimumContrastRatio:4.5,allowProposedApi:true,theme:TERMINAL_THEME});
   fit = new FitAddon.FitAddon(); terminal.loadAddon(fit); terminal.open(mount); fit.fit();
   terminalKey = `${selectedFleet}/${selectedTask}`;
   if(mode === 'agent') terminal.writeln('Starting agent CLI…');
@@ -963,3 +969,13 @@ document.addEventListener('click', event => {
   new MutationObserver(sync).observe(source, {childList: true, characterData: true, subtree: true});
   sync();
 })();
+
+// The Agent settings popover closes on an outside click or Escape, like the workspace menu.
+document.addEventListener('click', event => {
+  const popover = $('agent-settings');
+  if (popover?.open && !popover.contains(event.target) && !event.target.closest('dialog')) popover.open = false;
+});
+document.addEventListener('keydown', event => {
+  const popover = $('agent-settings');
+  if (event.key === 'Escape' && popover?.open && !document.querySelector('dialog[open]')) { popover.open = false; popover.querySelector('summary').focus(); }
+});

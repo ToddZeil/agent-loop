@@ -215,7 +215,7 @@ test('tile options delete a working agent while the supervisor and other agents 
   await expect(page.locator('#task-status')).toHaveText('working', {timeout:15000});
   await page.locator('[data-task="menu-keep"]').click();
   const card = page.locator('[data-task="menu-delete"]');
-  expect((await card.boundingBox()).height).toBe(112);
+  expect((await card.boundingBox()).height).toBe(80);
   await card.locator('summary').click();
   await expect(page.locator('#task-title')).toHaveText('menu-keep');
   await expect(card.getByRole('button', {name:'Delete & clean up',exact:true})).toBeEnabled();
