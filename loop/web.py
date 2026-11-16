@@ -1109,7 +1109,7 @@ async def task_settings(request):
             model = body['model'].strip() or None
             provider = state['provider']
             config.setdefault('worker_models', {})[provider] = model
-            if provider == config.get('workers', ['codex'])[0]:
+            if provider == config.get('workers', ['claude'])[0]:
                 config['worker_model'] = model
             state.update(model=model, session_id=None, retry_at=0, wait_reason='', needs_help=False,
                          state='ready' if state['state'] != 'complete' else 'complete')
