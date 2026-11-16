@@ -315,7 +315,10 @@ test('simple setup needs only a repository and goal; supervisor reviews the resu
   await expect(page.locator('textarea[name="manifest"]')).toBeHidden();
   await page.getByLabel('Saved project',{exact:true}).selectOption(fixture.repo);
   await page.getByLabel('Goal',{exact:true}).fill('Set app.py value to 2 and verify the result.');
+  const created = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/supervisor/agents');
   await page.locator('#create-form button[name=start]').click();
+  const {added} = await (await created).json();
+  await expect(page.locator('#task-title')).toHaveText(added[0]);
   await expect(page.locator('#task-status')).toHaveText('complete',{timeout:20000});
   await page.getByRole('tab',{name:'Decisions',exact:true}).click();
   await expect(page.locator('#decisions-panel')).toContainText('SUPERVISOR REVIEW');
