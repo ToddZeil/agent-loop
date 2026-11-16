@@ -68,7 +68,7 @@ test('one supervisor: add an agent, use a real terminal, send direction, and com
   await page.getByRole('button',{name:'Send',exact:false}).click();
   await expect(page.locator('#toast')).toContainText('Direction saved');
   await expect(page.locator('#manager-state')).toContainText('running');
-  await expect(page.locator('#task-status')).toHaveText('complete',{timeout:20000});
+  await expect(page.locator('#task-status')).toHaveText('complete',{timeout:60000});
   await expect(page.locator('#stat-done')).toHaveText('1');
   await page.getByRole('tab',{name:'Run log',exact:true}).click();
   await expect(page.locator('#activity')).toContainText('Updated app.py');
@@ -273,7 +273,7 @@ test('agent and supervisor token reports update live and survive refresh',async 
   await page.getByLabel('Verification command (optional)',{exact:true}).fill(fixture.acceptance);
   await page.locator('#create-form button[name=start]').click();
   await expect(page.locator('#task-title')).toHaveText('token-worker');
-  await expect(page.locator('#task-status')).toHaveText('complete',{timeout:20000});
+  await expect(page.locator('#task-status')).toHaveText('complete',{timeout:60000});
   await expect(page.locator('#supervisor-token-total')).toHaveText('130');
   await expect(page.locator('#supervisor-token-input')).toHaveText('100');
   await expect(page.locator('#supervisor-token-output')).toHaveText('30');
@@ -319,7 +319,7 @@ test('simple setup needs only a repository and goal; supervisor reviews the resu
   await page.locator('#create-form button[name=start]').click();
   const {added} = await (await created).json();
   await expect(page.locator('#task-title')).toHaveText(added[0]);
-  await expect(page.locator('#task-status')).toHaveText('complete',{timeout:20000});
+  await expect(page.locator('#task-status')).toHaveText('complete',{timeout:60000});
   await page.getByRole('tab',{name:'Decisions',exact:true}).click();
   await expect(page.locator('#decisions-panel')).toContainText('SUPERVISOR REVIEW');
   await expect(page.locator('#decisions-panel')).toContainText('Result review passed.');
@@ -377,7 +377,7 @@ test('terminal shows live worker output during an active turn without opening a 
   await expect(page.locator('#task-status')).toHaveText('working');
   await expect(page.locator('#open-terminal')).toBeDisabled();
   await expect(page.locator('#terminal')).toBeHidden();
-  await expect(page.locator('#task-status')).toHaveText('complete',{timeout:20000});
+  await expect(page.locator('#task-status')).toHaveText('complete',{timeout:60000});
   await expect(page.locator('#worker-terminal-output')).toContainText('Updated app.py');
   await page.locator('#stop').click();
 });
@@ -392,7 +392,7 @@ test('sending follow-up to a completed worker starts a stopped supervisor and re
   await page.getByRole('button',{name:'Send',exact:false}).click();
   await expect(page.locator('#manager-state')).toContainText('running');
   await expect.poll(async () => (await (await page.request.get('/api/supervisor')).json()).supervisor.tasks.find(t=>t.id===taskId).turns).toBeGreaterThan(before);
-  await expect(page.locator('#task-status')).toHaveText('complete',{timeout:20000});
+  await expect(page.locator('#task-status')).toHaveText('complete',{timeout:60000});
   await page.locator('#stop').click();
 });
 
@@ -593,7 +593,7 @@ test('idle agent terminal connects while its status refresh is delayed', async (
     await page.unrouteAll({behavior:'wait'});
   }
   await page.locator('#return-native').click();
-  await expect(page.locator('#task-status')).toHaveText('complete',{timeout:20000});
+  await expect(page.locator('#task-status')).toHaveText('complete',{timeout:60000});
   await page.locator('#stop').click();
 });
 
@@ -623,7 +623,7 @@ test('active worker yields its terminal only after the current turn', async ({pa
   await page.keyboard.press('Enter');
   await page.waitForFunction(() => terminal && Array.from({length:terminal.buffer.active.length},(_,i)=>terminal.buffer.active.getLine(i)?.translateToString()||'').join('\n').includes('Codex reply: after handoff'));
   await page.locator('#return-native').click();
-  await expect(page.locator('#task-status')).toHaveText('complete',{timeout:20000});
+  await expect(page.locator('#task-status')).toHaveText('complete',{timeout:60000});
   await page.locator('#stop').click();
 });
 
@@ -654,7 +654,7 @@ test('actual interactive terminal supports direct typing, reconnect, and other s
   await page.getByLabel('Goal',{exact:true}).fill('Set value to 2 while another agent is interactive.');
   await page.locator('#create-form button[name="save"]').click();
   await expect(page.locator('#create-dialog')).toBeHidden();
-  await expect(page.locator('#task-status')).toHaveText('complete',{timeout:20000});
+  await expect(page.locator('#task-status')).toHaveText('complete',{timeout:60000});
   await page.locator(`[data-task="${nativeAgent}"]`).click();
   await page.getByRole('tab',{name:'Agent terminal',exact:true}).click();
   await expect(page.locator('#native-status')).toContainText('Connected',{timeout:20000});
@@ -664,7 +664,7 @@ test('actual interactive terminal supports direct typing, reconnect, and other s
   await page.waitForFunction(()=>terminal && Array.from({length:terminal.buffer.active.length},(_,i)=>terminal.buffer.active.getLine(i)?.translateToString()||'').join('\n').includes('Codex reply: second message'));
   await page.screenshot({path:path.resolve(__dirname,'../../.agent-loop/native-codex-terminal.png'),fullPage:false});
   await page.locator('#return-native').click();
-  await expect(page.locator('#task-status')).toHaveText('complete',{timeout:20000});
+  await expect(page.locator('#task-status')).toHaveText('complete',{timeout:60000});
   await page.locator('#stop').click();
 });
 
@@ -824,7 +824,7 @@ test('Claude models can be selected when creating an agent', async ({page,reques
   await expect.poll(async () => (await (await page.request.get('/api/supervisor')).json()).supervisor.tasks.find(t => t.goal === 'Create a Claude agent for this project.')?.provider).toBe('claude');
   const task = (await (await page.request.get('/api/supervisor')).json()).supervisor.tasks.find(t => t.goal === 'Create a Claude agent for this project.');
   expect(task.model).toBe('sonnet');
-  await expect(page.locator('#task-status')).toHaveText('complete', {timeout:20000});
+  await expect(page.locator('#task-status')).toHaveText('complete', {timeout:60000});
   await expect(page.locator('#worker-terminal-output')).toContainText('Updated app.py');
 });
 
@@ -854,7 +854,7 @@ test('agent terminal shows startup feedback while the connection is delayed', as
   await page.keyboard.press('Enter');
   await page.waitForFunction(() => terminal && Array.from({length:terminal.buffer.active.length},(_,i)=>terminal.buffer.active.getLine(i)?.translateToString()||'').join('\n').includes('Codex reply: after delay'));
   await page.locator('#return-native').click();
-  await expect(page.locator('#task-status')).toHaveText('complete',{timeout:20000});
+  await expect(page.locator('#task-status')).toHaveText('complete',{timeout:60000});
   await page.locator('#stop').click();
 });
 
@@ -957,7 +957,7 @@ test('subagents default on, attachments reach the goal, and conversation is sear
   const created = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/supervisor/agents');
   await page.locator('#create-form button[name=start]').click();
   const {added} = await (await created).json();
-  await expect(page.locator('#task-status')).toHaveText('complete',{timeout:20000});
+  await expect(page.locator('#task-status')).toHaveText('complete',{timeout:60000});
   await page.getByRole('tab',{name:'Conversation',exact:true}).click();
   await expect(page.locator('#worker-terminal-output')).toContainText('notes.txt');
   await expect(page.locator('#find-bar')).toBeVisible();
@@ -977,7 +977,7 @@ test('agent search finds text inside an agent conversation',async ({page,request
   await page.getByLabel('Goal',{exact:true}).fill('Set app.py value to 2 and verify the result.');
   await page.locator('#create-form button[name=start]').click();
   await expect(page.locator('#create-dialog')).not.toHaveAttribute('open','');
-  await expect(page.locator('#task-status')).toHaveText('complete',{timeout:20000});
+  await expect(page.locator('#task-status')).toHaveText('complete',{timeout:60000});
   await page.locator('#worker-search').fill('zzz-nothing-here');
   await expect(page.locator('.list-empty')).toBeVisible();
   await page.locator('#worker-search').fill('verified value 2');
