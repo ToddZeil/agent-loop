@@ -1,6 +1,9 @@
 """Loopback-only fleet control and persistent, ownership-locked local PTYs."""
 import argparse
 import asyncio
+import base64
+import binascii
+import re
 from contextlib import ExitStack
 import fcntl
 import hashlib
@@ -573,7 +576,7 @@ class Controller:
                     task['goal'] = goals.get(task['id'], '')
                     config = runs[task['id']].config
                     task['full_access'] = config.get('full_access', True)
-                    task['allow_subagents'] = config.get('allow_subagents', False)
+                    task['allow_subagents'] = config.get('allow_subagents', True)
                     task['worker_effort'] = config.get('worker_effort') or 'medium'
                     task['usage'] = agent_usage(task, config)
                     task.pop('token_usage', None)
@@ -747,6 +750,81 @@ async def supervisor_settings(request):
     return web.json_response({'ok': True})
 
 
+MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+
+
+def save_attachments(home, tasks):
+    """Write uploaded files under the supervisor home and reference them in each goal."""
+    result = []
+    for task in tasks:
+        if not isinstance(task, dict) or not task.get('attachments'):
+            result.append({k: v for k, v in task.items() if k != 'attachments'} if isinstance(task, dict) else task)
+            continue
+        files = task['attachments']
+        if not isinstance(files, list) or len(files) > 20:
+            raise ValueError('attachments must be a list of at most 20 files')
+        ident = task.get('id')
+        if not isinstance(ident, str) or not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,60}', ident):
+            raise ValueError('Task ids must be unique lowercase slugs')
+        folder = Path(home) / 'attachments' / ident
+        folder.mkdir(parents=True, exist_ok=True)
+        saved = []
+        for index, item in enumerate(files):
+            if not isinstance(item, dict) or not isinstance(item.get('name'), str) or not isinstance(item.get('data'), str):
+                raise ValueError('Each attachment needs a name and base64 data')
+            name = re.sub(r'[^A-Za-z0-9._-]+', '_', Path(item['name']).name).lstrip('.') or 'file'
+            try:
+                data = base64.b64decode(item['data'], validate=True)
+            except (binascii.Error, ValueError):
+                raise ValueError('Attachment ' + name + ' is not valid base64')
+            if len(data) > MAX_ATTACHMENT_BYTES:
+                raise ValueError('Attachment ' + name + ' is larger than 20 MB')
+            path = folder / (str(index + 1) + '-' + name)
+            path.write_bytes(data)
+            saved.append(str(path))
+        goal = str(task.get('goal', '')).rstrip() + '\n\nAttached files (read them as needed):\n' + '\n'.join('- ' + p for p in saved)
+        result.append({**{k: v for k, v in task.items() if k != 'attachments'}, 'goal': goal})
+    return result
+
+
+def search_agents(fleet, query):
+    """Case-insensitive search of each agent's goal, follow-up notes and recent conversation."""
+    needle = query.lower()
+    hits = {}
+
+    def snippet(text, where):
+        at = text.lower().find(needle)
+        if at < 0:
+            return None
+        piece = text[max(0, at - 40):at + len(query) + 60].replace('\\n', ' ').replace('\n', ' ')
+        return {'where': where, 'text': piece.strip()}
+
+    for task, run in fleet.runs():
+        found = snippet(str(task.get('goal', '')), 'goal')
+        if not found:
+            try:
+                found = snippet(run.path('inbox.jsonl').read_text(), 'message')
+            except OSError:
+                pass
+        if not found:
+            for path in sorted(run.path('logs').glob('*.jsonl'), key=lambda p: p.stat().st_mtime, reverse=True)[:6]:
+                found = snippet(tail(path, 200000), 'conversation')
+                if found:
+                    break
+        if found:
+            hits[task['id']] = found
+    return hits
+
+
+async def supervisor_search(request):
+    c = request.app[APP_KEY]
+    query = request.query.get('q', '').strip()
+    if len(query) < 2 or len(query) > 200:
+        return web.json_response({'matches': {}})
+    fleet = c.fleet(c.supervisor()['id'])
+    return web.json_response({'matches': await asyncio.to_thread(search_agents, fleet, query)})
+
+
 async def supervisor_agents(request):
     c = request.app[APP_KEY]
     body = await object_body(request)
@@ -756,6 +834,7 @@ async def supervisor_agents(request):
         tasks = body.get('tasks')
         if not isinstance(tasks, list) or not tasks:
             raise ValueError('Add at least one agent')
+        tasks = await asyncio.to_thread(save_attachments, fleet.home, tasks)
         added = await asyncio.to_thread(fleet.add_agents, tasks)
         c.save_projects([t['repo'] for t in added])
         start_error = None
@@ -1342,7 +1421,7 @@ async def deploy_action(request):
 
 
 def create_app(home, use_tmux=False):
-    app = web.Application(middlewares=[boundary], client_max_size=1024 * 1024)
+    app = web.Application(middlewares=[boundary], client_max_size=64 * 1024 * 1024)
     app[APP_KEY] = Controller(home, use_tmux)
     app.router.add_get('/', index)
     def file_handler(path):
@@ -1360,6 +1439,7 @@ def create_app(home, use_tmux=False):
     app.router.add_post('/api/deploy', deploy_action)
     app.router.add_get('/api/deploy/jobs/{job:[0-9a-f]{16}}/log', deployment_log)
     app.router.add_get('/api/supervisor', supervisor_state)
+    app.router.add_get('/api/supervisor/search', supervisor_search)
     app.router.add_get('/api/events', supervisor_events)
     app.router.add_post('/api/supervisor/settings', supervisor_settings)
     app.router.add_post('/api/supervisor/agents', supervisor_agents)

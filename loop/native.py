@@ -134,7 +134,7 @@ def agent_terminal_command(run, config=None):
                    '-c', 'model_reasoning_effort=' + json.dumps(effort)]
         if model:
             options += ['--model', model]
-        flag = '--enable' if run.config.get('allow_subagents') else '--disable'
+        flag = '--enable' if run.config.get('allow_subagents', True) else '--disable'
         options += [flag, 'multi_agent', flag, 'multi_agent_v2']
         argv = ['codex', 'resume', *options, session] if session else ['codex', *options]
     elif provider == 'claude':
@@ -149,7 +149,7 @@ def agent_terminal_command(run, config=None):
             argv += ['--dangerously-skip-permissions']
         if model:
             argv += ['--model', model]
-        if not run.config.get('allow_subagents'):
+        if not run.config.get('allow_subagents', True):
             argv += ['--disallowedTools', 'Agent']
     elif provider == 'antigravity':
         argv = ['agy', '--add-dir', str(run.worktree)]

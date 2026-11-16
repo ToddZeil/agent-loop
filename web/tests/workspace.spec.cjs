@@ -943,3 +943,44 @@ test('diff review aligns hunks and handles themes, long lines and binary files',
   await page.getByLabel('Diff view',{exact:true}).selectOption('patch');
   await expect(page.locator('.diff-patch')).toContainText('Binary files');
 });
+
+test('subagents default on, attachments reach the goal, and conversation is searchable',async ({page,request}) => {
+  const fixture=await (await request.get('/test-fixture')).json();
+  await page.goto('/');
+  await page.locator('#new-fleet').click();
+  await expect(page.locator('[data-field="allow-subagents"]')).toBeChecked();
+  await page.getByLabel('Repository root',{exact:true}).fill(fixture.repo);
+  await page.getByLabel('Goal',{exact:true}).fill('Set app.py value to 2 and verify the result.');
+  await page.locator('[data-attach-input]').setInputFiles({name:'notes.txt',mimeType:'text/plain',buffer:Buffer.from('hello attachment')});
+  await expect(page.locator('.attach-list')).toContainText('notes.txt');
+  const created = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/supervisor/agents');
+  await page.locator('#create-form button[name=start]').click();
+  const {added} = await (await created).json();
+  await expect(page.locator('#task-status')).toHaveText('complete',{timeout:20000});
+  await page.getByRole('tab',{name:'Conversation',exact:true}).click();
+  await expect(page.locator('#worker-terminal-output')).toContainText('notes.txt');
+  await expect(page.locator('#find-bar')).toBeVisible();
+  await page.locator('#find-input').fill('notes.txt');
+  await expect(page.locator('#find-count')).toHaveText(/1 \/ \d+/);
+  await expect(page.locator('mark.find-hit').first()).toBeVisible();
+  await page.locator('#find-input').fill('zzz-no-such-text');
+  await expect(page.locator('#find-count')).toHaveText('No matches');
+  await page.getByRole('button',{name:'Stop scheduling',exact:true}).click();
+});
+
+test('agent search finds text inside an agent conversation',async ({page,request}) => {
+  const fixture=await (await request.get('/test-fixture')).json();
+  await page.goto('/');
+  await page.locator('#new-fleet').click();
+  await page.getByLabel('Repository root',{exact:true}).fill(fixture.repo);
+  await page.getByLabel('Goal',{exact:true}).fill('Set app.py value to 2 and verify the result.');
+  await page.locator('#create-form button[name=start]').click();
+  await expect(page.locator('#create-dialog')).not.toHaveAttribute('open','');
+  await expect(page.locator('#task-status')).toHaveText('complete',{timeout:20000});
+  await page.locator('#worker-search').fill('zzz-nothing-here');
+  await expect(page.locator('.list-empty')).toBeVisible();
+  await page.locator('#worker-search').fill('verified value 2');
+  await expect(page.locator('.worker-card')).not.toHaveCount(0);
+  await expect(page.locator('.worker-card .goal').first()).toContainText('In conversation');
+  await page.getByRole('button',{name:'Stop scheduling',exact:true}).click();
+});

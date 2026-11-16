@@ -101,6 +101,20 @@ async function saveModel(provider, model) {
     modelCatalog = (await api('/models', {provider,model})).providers;
   }
 }
+// Agent search also looks inside each agent's messages and conversation (server-side, debounced).
+let contentHits = {}, contentQuery = '', searchTimer = 0;
+function searchContent() {
+  clearTimeout(searchTimer);
+  const query = $('worker-search').value.trim();
+  if (query.length < 2) { if (contentQuery) { contentHits = {}; contentQuery = ''; render(); } return; }
+  searchTimer = setTimeout(async () => {
+    try {
+      const data = await api('/supervisor/search?q=' + encodeURIComponent(query));
+      if ($('worker-search').value.trim() !== query) return;
+      contentHits = data.matches || {}; contentQuery = query; render();
+    } catch (e) { /* the name/goal filter still works */ }
+  }, 250);
+}
 function agentName(task) {
   return /^task-\d+$/.test(task.id) && task.goal
     ? task.goal.trim().split('\n')[0].slice(0, 72) : task.id;
@@ -156,14 +170,14 @@ function render() {
   const query = $('worker-search').value.trim().toLowerCase();
   const status = $('worker-filter').value;
   const visibleTasks = tasks.filter(t => {
-    const matchesQuery = !query || `${t.id} ${t.repo} ${t.goal}`.toLowerCase().includes(query);
+    const matchesQuery = !query || `${t.id} ${t.repo} ${t.goal}`.toLowerCase().includes(query) || !!contentHits[t.id];
     const matchesStatus = !status || (status === 'attention' ? ['waiting','blocked'].includes(t.state)
       : status === 'working' ? ['working','verifying'].includes(t.state) : t.state === status);
     return matchesQuery && matchesStatus;
   });
   const openAgentMenu = $('workers').querySelector('details[open]')?.dataset.agentMenu;
   $('workers').innerHTML = visibleTasks.map(t => {
-    return `<article class="worker-card ${t.id === selectedTask ? 'selected' : ''}" data-task="${escapeHTML(t.id)}"><button class="worker-select" aria-label="Open agent ${escapeHTML(agentName(t))}"><div class="worker-top"><strong>${escapeHTML(agentName(t))}</strong>${pill(t.signal || t.state)}</div><span class="repo" title="${escapeHTML(t.repo)}">${escapeHTML(t.repo.split(/[\\/]/).filter(Boolean).pop())}</span><div class="goal">${escapeHTML(t.delete_requested ? (t.delete_error ? 'Cleanup failed: '+t.delete_error : 'Deletion queued') : t.state === 'waiting' && t.wait_reason ? t.wait_reason : t.goal || t.next_action)}</div></button><details class="agent-card-menu" data-agent-menu="${escapeHTML(t.id)}" ${openAgentMenu === t.id ? 'open' : ''}><summary aria-label="Options for ${escapeHTML(agentName(t))}">⋯</summary><div class="agent-card-actions"><button data-archive="${escapeHTML(t.id)}" ${t.delete_requested || t.terminal_requested ? 'disabled' : ''}>Archive agent</button><button class="danger" data-delete="${escapeHTML(t.id)}" ${t.delete_requested && !t.delete_error ? 'disabled' : ''}>${t.delete_error ? 'Retry cleanup' : 'Delete &amp; clean up'}</button></div></details></article>`;
+    return `<article class="worker-card ${t.id === selectedTask ? 'selected' : ''}" data-task="${escapeHTML(t.id)}"><button class="worker-select" aria-label="Open agent ${escapeHTML(agentName(t))}"><div class="worker-top"><strong>${escapeHTML(agentName(t))}</strong>${pill(t.signal || t.state)}</div><span class="repo" title="${escapeHTML(t.repo)}">${escapeHTML(t.repo.split(/[\\/]/).filter(Boolean).pop())}</span><div class="goal">${query && contentHits[t.id] && contentHits[t.id].where !== 'goal' ? `<em>In ${escapeHTML(contentHits[t.id].where)}:</em> …${escapeHTML(contentHits[t.id].text)}…` : escapeHTML(t.delete_requested ? (t.delete_error ? 'Cleanup failed: '+t.delete_error : 'Deletion queued') : t.state === 'waiting' && t.wait_reason ? t.wait_reason : t.goal || t.next_action)}</div></button><details class="agent-card-menu" data-agent-menu="${escapeHTML(t.id)}" ${openAgentMenu === t.id ? 'open' : ''}><summary aria-label="Options for ${escapeHTML(agentName(t))}">⋯</summary><div class="agent-card-actions"><button data-archive="${escapeHTML(t.id)}" ${t.delete_requested || t.terminal_requested ? 'disabled' : ''}>Archive agent</button><button class="danger" data-delete="${escapeHTML(t.id)}" ${t.delete_requested && !t.delete_error ? 'disabled' : ''}>${t.delete_error ? 'Retry cleanup' : 'Delete &amp; clean up'}</button></div></details></article>`;
   }).join('') || '<p class="list-empty">No matching agents.</p>';
   $('workers').querySelectorAll('[data-task]').forEach(card => {
     card.querySelector('.worker-select').onclick = () => chooseTask(card.dataset.task);
@@ -501,7 +515,7 @@ async function loadLogs() {
     const panel = $(activeTab === 'terminal' ? 'worker-terminal-output' : 'activity'), atBottom = panel.scrollTop + panel.clientHeight >= panel.scrollHeight - 30;
     if(activeTab === 'terminal') renderConversation(data);
     else { const text=readableLogs(data); if(panel.textContent !== text) panel.textContent=text; }
-    if(atBottom) panel.scrollTop=panel.scrollHeight;
+    if($('find-input').value) applyFind(); else if(atBottom) panel.scrollTop=panel.scrollHeight;
   } catch (e) { if (key === `${selectedFleet}/${selectedTask}`) $(activeTab === 'terminal' ? 'worker-terminal-output' : 'activity').textContent = e.message; }
 }
 async function fleetAction(action) {
@@ -509,7 +523,7 @@ async function fleetAction(action) {
   try { await api(`/supervisor/${action}`, {}); toast(action === 'stop' ? 'Stop requested. Active workers finish their current turn.' : 'Supervisor started. Agents can join while it runs.'); await refresh(); }
   catch(e) { toast(e.message, true); render(); }
 }
-$('worker-search').oninput = () => render();
+$('worker-search').oninput = () => { if ($('worker-search').value.trim() !== contentQuery) contentHits = {}; render(); searchContent(); };
 $('worker-filter').onchange = () => { syncStatTiles(); render(); };
 // Summary tiles double as one-click filters for the agent list.
 function syncStatTiles() {
@@ -569,8 +583,57 @@ $('note-form').onsubmit = async event => {
   }
   catch(e) { toast(e.message, true); } finally { button.disabled = false; }
 };
+// Find-in-view for the Conversation and Run log panels: highlights matches, opens matching command cards.
+const findBar = document.createElement('div');
+findBar.id = 'find-bar'; findBar.className = 'find-bar'; findBar.hidden = true;
+findBar.innerHTML = '<input id="find-input" type="search" aria-label="Search this agent\'s work" placeholder="Search this agent\'s work…  (⌘F)"><span id="find-count" class="muted" aria-live="polite"></span><button type="button" id="find-prev" class="button small" aria-label="Previous match">↑</button><button type="button" id="find-next" class="button small" aria-label="Next match">↓</button>';
+$('native-panel').before(findBar);
+let findIndex = 0;
+function findPanel() { return activeTab === 'terminal' ? $('worker-terminal-output') : activeTab === 'activity' ? $('activity') : null; }
+function clearFind(panel) {
+  panel.querySelectorAll('mark.find-hit').forEach(m => m.replaceWith(document.createTextNode(m.textContent)));
+  panel.normalize();
+}
+function applyFind(scroll = false) {
+  const panel = findPanel(), query = $('find-input').value;
+  if (!panel) return;
+  clearFind(panel);
+  if (!query) { $('find-count').textContent = ''; return; }
+  const needle = query.toLowerCase(), nodes = [];
+  const walker = document.createTreeWalker(panel, NodeFilter.SHOW_TEXT);
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) if (n.nodeValue.toLowerCase().includes(needle)) nodes.push(n);
+  for (const node of nodes) {
+    const text = node.nodeValue, lower = text.toLowerCase(), frag = document.createDocumentFragment();
+    let at = 0;
+    for (let i = lower.indexOf(needle); i !== -1; i = lower.indexOf(needle, at)) {
+      frag.append(text.slice(at, i));
+      const mark = document.createElement('mark'); mark.className = 'find-hit'; mark.textContent = text.slice(i, i + needle.length);
+      frag.append(mark); at = i + needle.length;
+    }
+    frag.append(text.slice(at)); node.replaceWith(frag);
+  }
+  const hits = [...panel.querySelectorAll('mark.find-hit')];
+  $('find-count').textContent = hits.length ? `${Math.min(findIndex, hits.length - 1) + 1} / ${hits.length}` : 'No matches';
+  if (!hits.length) return;
+  findIndex = Math.min(findIndex, hits.length - 1);
+  hits.forEach((m, i) => m.classList.toggle('current', i === findIndex));
+  hits.forEach(m => { const card = m.closest('details'); if (card) card.open = true; });
+  if (scroll) hits[findIndex].scrollIntoView({block: 'center'});
+}
+function stepFind(delta) {
+  const count = findPanel()?.querySelectorAll('mark.find-hit').length || 0;
+  if (!count) return;
+  findIndex = (findIndex + delta + count) % count; applyFind(true);
+}
+$('find-input').oninput = () => { findIndex = 0; applyFind(true); };
+$('find-input').onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); stepFind(event.shiftKey ? -1 : 1); } else if (event.key === 'Escape') { $('find-input').value = ''; applyFind(); } };
+$('find-next').onclick = () => stepFind(1); $('find-prev').onclick = () => stepFind(-1);
+document.addEventListener('keydown', event => {
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f' && findPanel() && !$('create-dialog').open) { event.preventDefault(); $('find-input').focus(); $('find-input').select(); }
+});
 function selectTab(tab) {
-  activeTab = tab;localStorage.setItem('loop-tab',tab);
+  activeTab = tab;
+  findBar.hidden = !['terminal','activity'].includes(tab);localStorage.setItem('loop-tab',tab);
   if(selectedTask) {localStorage.setItem('loop-task',selectedTask);const url=new URL(location.href);url.searchParams.set('agent',selectedTask);url.searchParams.set('tab',tab);history.replaceState(null,'',url.href);}
   document.querySelectorAll('[data-tab]').forEach(b => { b.classList.toggle('active', b.dataset.tab === tab); b.setAttribute('aria-selected', String(b.dataset.tab === tab)); b.tabIndex = b.dataset.tab === tab ? 0 : -1; });
   for (const name of ['native','activity','terminal','changes','usage','decisions']) $(name+'-panel').hidden = name !== tab;
@@ -709,7 +772,7 @@ function updateAgentNames() {
 function addTask() {
   taskNumber++;
   const row = document.createElement('section'); row.className = 'task-fields';
-  row.innerHTML = `<div class="task-field-head"><span>AGENT ${String(taskNumber).padStart(2,'0')}</span><button type="button" class="icon-button remove-task" aria-label="Remove agent form">×</button></div><label>Saved project<select data-field="project" aria-label="Saved project"><option value="">Choose a saved repository, or enter a path…</option></select></label><label data-manual-repo>Repository root<input data-field="repo" placeholder="/Users/you/projects/app" required></label><label>Goal<textarea data-field="goal" rows="3" placeholder="What would you like this agent to do?" required></textarea></label><div class="form-row"><label>Worker provider<select data-field="provider"><option>codex</option><option>claude</option><option>antigravity</option><option>muse</option></select></label><label>Model<input data-field="model" placeholder="Provider default"></label></div><label>Worker effort<select data-field="effort" aria-label="Worker effort"><option>medium</option></select></label><label class="subagent-option"><input type="checkbox" data-field="full-access" checked> Full access · no permission prompts</label><label class="subagent-option"><input type="checkbox" data-field="allow-subagents"> Allow subagents</label><small class="muted agent-name-preview" aria-live="polite">Name is generated from your goal.</small>`;
+  row.innerHTML = `<div class="task-field-head"><span>AGENT ${String(taskNumber).padStart(2,'0')}</span><button type="button" class="icon-button remove-task" aria-label="Remove agent form">×</button></div><label>Saved project<select data-field="project" aria-label="Saved project"><option value="">Choose a saved repository, or enter a path…</option></select></label><label data-manual-repo>Repository root<input data-field="repo" placeholder="/Users/you/projects/app" required></label><label>Goal<textarea data-field="goal" rows="3" placeholder="What would you like this agent to do?" required></textarea></label><div class="form-row"><label>Worker provider<select data-field="provider"><option>codex</option><option>claude</option><option>antigravity</option><option>muse</option></select></label><label>Model<input data-field="model" placeholder="Provider default"></label></div><label>Worker effort<select data-field="effort" aria-label="Worker effort"><option>medium</option></select></label><label class="subagent-option"><input type="checkbox" data-field="full-access" checked> Full access · no permission prompts</label><label class="subagent-option"><input type="checkbox" data-field="allow-subagents" checked> Allow subagents</label><div class="attach-zone" data-attach tabindex="0"><span>Drop, paste (⌘V) or <button type="button" class="link-button" data-attach-pick>choose</button> images and files</span><input type="file" multiple hidden data-attach-input><ul class="attach-list"></ul></div><small class="muted agent-name-preview" aria-live="polite">Name is generated from your goal.</small>`;
   const options = document.createElement('section'); options.className = 'task-options'; row._options = options;
   options.innerHTML = `<h4>Agent ${String(taskNumber).padStart(2,'0')}</h4><label>Agent ID<input data-field="id" pattern="[a-z0-9](?:[a-z0-9]|-){0,60}" placeholder="Generated automatically"></label><label>Verification command (optional)<input data-field="check" placeholder="For example: npm test"></label><small class="muted">Leave empty to use supervisor review.</small><div class="form-row"><label>Fallback provider<select data-field="fallback"><option value="">Wait for quota reset</option><option>codex</option><option>claude</option><option>antigravity</option><option>muse</option></select></label><label>Fallback model<input data-field="fallback-model" placeholder="Provider default"></label></div>`;
   row.querySelector('.remove-task').onclick = () => { if ($('task-fields').children.length > 1) { options.remove(); row.remove(); updateAgentNames(); } else toast('Add at least one agent.', true); };
@@ -729,9 +792,46 @@ function addTask() {
   fallback.onchange = () => modelPicker(agentField(row, 'fallback-model'), fallback.value || 'codex', '');
   agentField(row, 'goal').oninput = updateAgentNames;
   agentField(row, 'id').oninput = updateAgentNames;
+  setupAttachments(row);
   updateProjectPickers();
   updateAgentNames();
 }
+function setupAttachments(row) {
+  const zone = row.querySelector('[data-attach]'), input = zone.querySelector('[data-attach-input]'), list = zone.querySelector('.attach-list');
+  row._files = [];
+  const render = () => {
+    list.replaceChildren(...row._files.map((file, i) => {
+      const li = document.createElement('li'); li.textContent = `${file.name} (${Math.ceil(file.size/1024)} KB) `;
+      const rm = document.createElement('button'); rm.type = 'button'; rm.className = 'link-button'; rm.textContent = '×'; rm.setAttribute('aria-label', 'Remove ' + file.name);
+      rm.onclick = () => { row._files.splice(i, 1); render(); }; li.append(rm); return li;
+    }));
+  };
+  const add = files => {
+    for (const file of files) {
+      if (file.size > 20 * 1024 * 1024) { toast(`${file.name} is larger than 20 MB.`, true); continue; }
+      row._files.push(file.name ? file : new File([file], `pasted-${Date.now()}.${(file.type.split('/')[1] || 'bin')}`, {type: file.type}));
+    }
+    render();
+  };
+  zone.querySelector('[data-attach-pick]').onclick = () => input.click();
+  input.onchange = () => { add([...input.files]); input.value = ''; };
+  zone.ondragover = event => { event.preventDefault(); zone.classList.add('dragging'); };
+  zone.ondragleave = () => zone.classList.remove('dragging');
+  zone.ondrop = event => { event.preventDefault(); zone.classList.remove('dragging'); add([...event.dataTransfer.files]); };
+  // Paste works anywhere in this agent's form (goal box included) when the clipboard holds files.
+  row.addEventListener('paste', event => {
+    const files = [...(event.clipboardData?.files || [])];
+    if (files.length) { event.preventDefault(); add(files); }
+  });
+  row.addEventListener('dragover', event => { if (event.dataTransfer?.types.includes('Files')) event.preventDefault(); });
+  row.addEventListener('drop', event => { if (event.dataTransfer?.files.length) { event.preventDefault(); add([...event.dataTransfer.files]); } });
+}
+const fileToBase64 = file => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+  reader.onerror = () => reject(new Error('Could not read ' + file.name));
+  reader.readAsDataURL(file);
+});
 function openCreate() { loadModels().catch(e => toast(e.message,true)); loadProjects().catch(e => toast(e.message,true)); if (!$('task-fields').children.length) addTask(); $('create-error').textContent = ''; $('create-dialog').showModal(); }
 $('new-fleet').onclick = openCreate; $('empty-create').onclick = openCreate; $('add-task').onclick = addTask;
 $('import-fleet').onclick = () => { $('import-error').textContent=''; $('import-dialog').showModal(); };
@@ -749,13 +849,14 @@ $('create-form').onsubmit = async event => {
     if (fields.get('manifest').trim()) tasks = JSON.parse(fields.get('manifest')).tasks;
     else {
       updateAgentNames();
-      tasks = [...$('task-fields').children].map(row => {
+      tasks = await Promise.all([...$('task-fields').children].map(async row => {
         const get = field => agentField(row,field).value.trim();
         const provider = get('provider'), fallback = get('fallback'), workers = [provider], worker_models = {};
         if (get('model')) worker_models[provider] = get('model');
         if (fallback && fallback !== provider) { workers.push(fallback); if (get('fallback-model')) worker_models[fallback] = get('fallback-model'); }
-        return {id:get('id') || row.dataset.defaultId,repo:get('repo'),goal:get('goal'),acceptance:get('check') ? [get('check')] : [],options:{workers,worker_models,worker_effort:get('effort'),full_access:agentField(row,'full-access').checked,allow_subagents:agentField(row,'allow-subagents').checked}};
-      });
+        const attachments = await Promise.all((row._files || []).map(async f => ({name:f.name,data:await fileToBase64(f)})));
+        return {id:get('id') || row.dataset.defaultId,repo:get('repo'),goal:get('goal'),attachments,acceptance:get('check') ? [get('check')] : [],options:{workers,worker_models,worker_effort:get('effort'),full_access:agentField(row,'full-access').checked,allow_subagents:agentField(row,'allow-subagents').checked}};
+      }));
     }
     for (const task of tasks) for (const [provider, model] of Object.entries(task.options?.worker_models || {})) await saveModel(provider, model);
     const result = await api('/supervisor/agents',{tasks,start:button.value === 'start'});

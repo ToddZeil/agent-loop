@@ -489,3 +489,13 @@ details textarea[name=manifest] { font: 12px/1.6 ui-monospace, monospace; }
 
 .agent-model-settings label:first-child { flex: 2 1 280px; }
 .sidebar-bottom .dot { margin-right: 7px; }
+
+.attach-zone{border:1px dashed var(--line,#888);border-radius:8px;padding:.6rem .8rem;font-size:.85rem;color:var(--muted,#888);margin:.4rem 0}
+.attach-zone.dragging{border-style:solid;background:rgba(127,127,255,.12)}
+.attach-list{list-style:none;margin:.3rem 0 0;padding:0}
+.link-button{background:none;border:0;padding:0;color:inherit;text-decoration:underline;cursor:pointer;font:inherit}
+
+.find-bar{display:flex;align-items:center;gap:8px;padding:6px 24px;border-bottom:1px solid var(--line)}
+.find-bar input{flex:1;max-width:420px}
+mark.find-hit{background:rgba(255,200,0,.35);color:inherit;border-radius:2px}
+mark.find-hit.current{background:rgba(255,140,0,.7)}

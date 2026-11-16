@@ -295,7 +295,7 @@ class ContinuousRun(LiteRun):
                   "worker_max_seconds": self.config["worker_max_seconds"],
                   "task": {"provider": state["provider"], "model": state["model"], "effort": (self.config.get("worker_effort") or "medium"),
                            "full_access": self.config.get("full_access", True),
-                           "allow_subagents": self.config.get("allow_subagents", False)}}
+                           "allow_subagents": self.config.get("allow_subagents", True)}}
         path = self.path("attempts") / (attempt_id + ".json")
         atomic_json(path, record)
         state.update(state="working", attempt=attempt_id, next_action="reconcile worker")

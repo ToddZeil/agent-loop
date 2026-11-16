@@ -558,6 +558,9 @@ print(json.dumps({'type':'turn.completed','usage':{'input_tokens':11,'output_tok
     def test_real_detached_workers_parallel_questions_resume_and_completion(self):
         run = self.run_for('one')
         run.save('config.json',{**run.config,'allow_subagents':True})
+        for other in ('two',):
+            other_run = self.run_for(other)
+            other_run.save('config.json',{**other_run.config,'allow_subagents':False})
         with mock.patch.dict(os.environ, self.fake_cli()):
             # One scheduling pass launches real detached workers and returns.
             self.fleet.run(once=True)
