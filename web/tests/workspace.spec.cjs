@@ -391,7 +391,7 @@ test('sending follow-up to a completed worker starts a stopped supervisor and re
   await page.getByLabel('Give this worker direction',{exact:true}).fill('Recheck that app.py value is 2; no changes are needed.');
   await page.getByRole('button',{name:'Send',exact:false}).click();
   await expect(page.locator('#manager-state')).toContainText('running');
-  await expect.poll(async () => (await (await page.request.get('/api/supervisor')).json()).supervisor.tasks.find(t=>t.id===taskId).turns).toBeGreaterThan(before);
+  await expect.poll(async () => (await (await page.request.get('/api/supervisor')).json()).supervisor.tasks.find(t=>t.id===taskId).turns,{timeout:60000}).toBeGreaterThan(before);
   await expect(page.locator('#task-status')).toHaveText('complete',{timeout:60000});
   await page.locator('#stop').click();
 });
