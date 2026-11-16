@@ -476,6 +476,9 @@ test('desktop opens directly to a readable conversation with its composer in vie
   await expect(page.getByRole('tab').first()).toHaveText('Conversation');
   await conversationTab.focus();
   await page.keyboard.press('ArrowRight');
+  await expect(page.getByRole('tab',{name:'Changes',exact:true})).toBeFocused();
+  await expect(page.getByRole('tabpanel',{name:'Changes',exact:true})).toBeVisible();
+  await page.keyboard.press('ArrowRight');
   await expect(page.getByRole('tab',{name:'Run log',exact:true})).toBeFocused();
   await expect(page.getByRole('tabpanel',{name:'Run log',exact:true})).toBeVisible();
   await page.keyboard.press('End');
@@ -850,4 +853,36 @@ test('agent terminal shows startup feedback while the connection is delayed', as
   await page.locator('#return-native').click();
   await expect(page.locator('#task-status')).toHaveText('complete',{timeout:20000});
   await page.locator('#stop').click();
+});
+
+
+test('Changes lists files, renders safe diffs and refreshes', async ({page,request}) => {
+  const fixture=await (await request.get('/test-fixture')).json();
+  await page.goto('/');
+  await page.locator('#new-fleet').click();
+  await page.getByLabel('Repository root',{exact:true}).fill(fixture.repo);
+  await page.getByLabel('Goal',{exact:true}).fill('Inspect file changes.');
+  await page.getByRole('button',{name:'Add agents',exact:true}).click();
+  await page.getByRole('tab',{name:'Changes',exact:true}).click();
+  await expect(page.locator('#changes-files')).toContainText('No file changes yet.');
+  let changed=true;
+  await page.route('**/changes*', route => {
+    const url=new URL(route.request().url()), path=url.searchParams.get('path');
+    const data=path ? {path,diff:path === 'app.py' ? '--- a/app.py\n+++ b/app.py\n@@ -1 +1 @@\n-value = 1\n+value = 2\n' : '+<script>window.diffInjected = true</script>\n',truncated:false} : {base:'abcdef123456',files:changed ? [{path:'app.py',added:1,removed:1,status:'Changed'},{path:'new <file>.txt',added:null,removed:null,status:'New'}] : []};
+    return route.fulfill({json:data});
+  });
+  await page.getByRole('button',{name:'Refresh',exact:true}).click();
+  await expect(page.locator('#changes-summary')).toContainText('2 changed files');
+  await expect(page.locator('#changes-diff')).toContainText('+value = 2');
+  await expect(page.locator('#changes-diff .diff-added').last()).toHaveText('+value = 2');
+  await page.getByRole('button',{name:'new <file>.txt New file',exact:true}).click();
+  await expect(page.locator('#changes-path')).toHaveText('new <file>.txt');
+  await expect(page.locator('#changes-diff')).toContainText('<script>');
+  expect(await page.evaluate(()=>window.diffInjected)).toBeUndefined();
+  await page.reload();
+  await expect(page.getByRole('tab',{name:'Changes',exact:true})).toHaveAttribute('aria-selected','true');
+  changed=false;
+  await page.getByRole('button',{name:'Refresh',exact:true}).click();
+  await expect(page.locator('#changes-files')).toContainText('No file changes yet.');
+  await expect(page.locator('#changes-diff')).toBeEmpty();
 });

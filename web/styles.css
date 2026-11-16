@@ -415,3 +415,19 @@ h1 { font-size: 22px; margin: 0; }
 #confirm-dialog .dialog-head h2 { margin: 0; font-size: 19px; overflow-wrap: anywhere; }
 #confirm-dialog .muted { font-size: 13px; line-height: 1.7; }
 #confirm-dialog .button.danger { border-color: #986447; }
+
+.changes-panel { overflow: auto; }
+.changes-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px; border-bottom: 1px solid var(--line); }
+.changes-toolbar p { margin: 6px 0 0; }
+.changes-layout { display: grid; grid-template-columns: minmax(160px, 28%) minmax(0, 1fr); min-height: 300px; }
+.changes-files { border-right: 1px solid var(--line); padding: 8px; overflow-wrap: anywhere; }
+.change-file { width: 100%; text-align: left; display: flex; flex-direction: column; gap: 5px; padding: 10px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text); }
+.change-file:hover, .change-file.selected { background: var(--raised); border-color: var(--line); }
+.change-file small { color: var(--muted); }
+.changes-detail { min-width: 0; padding: 16px; }
+#changes-path { overflow-wrap: anywhere; }
+.changes-diff { font: 12px/1.65 ui-monospace, monospace; overflow: auto; tab-size: 4; max-height: 65vh; }
+.diff-added { color: #69bc7d; }
+.diff-removed { color: #db817c; }
+.diff-hunk { color: #72a9cc; }
+@media (max-width: 650px) { .changes-layout { grid-template-columns: 1fr; } .changes-files { border-right: 0; border-bottom: 1px solid var(--line); max-height: 180px; overflow: auto; } }

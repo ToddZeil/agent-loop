@@ -16,6 +16,7 @@ import struct
 import subprocess
 import sys
 import termios
+import tempfile
 import time
 import uuid
 
@@ -1072,6 +1073,63 @@ async def logs(request):
     return web.json_response({'output': tail(c.fleet(request.match_info['fleet']).home / 'manager.log')})
 
 
+def change_git(worktree, *args, limit=1024 * 1024, diff=False):
+    """Bound captured output, disable repository diff drivers and never mutate Git."""
+    with tempfile.TemporaryFile() as output:
+        try:
+            result = subprocess.run(
+                ['git', '-C', str(worktree), '--no-pager', *args],
+                stdout=output, stderr=subprocess.PIPE, timeout=20,
+                env={**os.environ, 'GIT_OPTIONAL_LOCKS': '0', 'GIT_LITERAL_PATHSPECS': '1'})
+        except subprocess.TimeoutExpired as exc:
+            raise ValueError('Reading changes timed out; refresh to try again') from exc
+        if result.returncode not in ((0, 1) if diff else (0,)):
+            raise ValueError(result.stderr.decode(errors='replace').strip() or 'Cannot read worktree changes')
+        output.seek(0)
+        data = output.read(limit + 1)
+    return data[:limit], len(data) > limit
+
+
+def worktree_changes(run, path=None):
+    base = run.state().get('base')
+    if not base:
+        raise ValueError('This agent has no saved starting commit')
+    raw, truncated = change_git(run.worktree, 'diff', '--no-ext-diff', '--no-textconv',
+                                '--no-renames', '--numstat', '-z', base, '--')
+    if truncated:
+        raise ValueError('Changed file list is too large to display')
+    files = []
+    for record in raw.split(b'\0'):
+        if not record:
+            continue
+        added, removed, name = record.split(b'\t', 2)
+        files.append({'path': os.fsdecode(name), 'added': int(added) if added != b'-' else None,
+                      'removed': int(removed) if removed != b'-' else None, 'status': 'Changed'})
+    raw, truncated = change_git(run.worktree, 'ls-files', '--others', '--exclude-standard', '-z')
+    if truncated:
+        raise ValueError('New file list is too large to display')
+    files.extend({'path': os.fsdecode(name), 'added': None, 'removed': None, 'status': 'New'}
+                 for name in raw.split(b'\0') if name)
+    files.sort(key=lambda item: item['path'])
+    if path is None:
+        return {'base': base, 'files': files}
+    item = next((item for item in files if item['path'] == path), None)
+    if item is None:
+        raise ValueError('File is no longer in this agent’s changed file list')
+    options = ('--no-ext-diff', '--no-textconv', '--no-color', '--no-renames')
+    if item['status'] == 'New':
+        args = ('diff', *options, '--no-index', '--', '/dev/null', str(run.worktree / path))
+    else:
+        args = ('diff', *options, base, '--', path)
+    raw, truncated = change_git(run.worktree, *args, limit=256 * 1024, diff=True)
+    return {'path': path, 'diff': raw.decode(errors='replace'), 'truncated': truncated}
+
+
+async def changes(request):
+    run = request.app[APP_KEY].run_for(request.match_info['fleet'], request.match_info['task'])
+    return web.json_response(await asyncio.to_thread(worktree_changes, run, request.query.get('path')))
+
+
 async def native_action(request):
     c = request.app[APP_KEY]
     key = (request.match_info['fleet'], request.match_info['task'])
@@ -1319,6 +1377,7 @@ def create_app(home, use_tmux=False):
     app.router.add_post('/api/fleets/{fleet}/tasks/{task}/note', note)
     app.router.add_post('/api/fleets/{fleet}/tasks/{task}/settings', task_settings)
     app.router.add_get('/api/fleets/{fleet}/tasks/{task}/logs', logs)
+    app.router.add_get('/api/fleets/{fleet}/tasks/{task}/changes', changes)
     app.router.add_get('/api/fleets/{fleet}/logs', logs)
     app.router.add_get('/api/fleets/{fleet}/tasks/{task}/terminal', terminal_socket)
     app.router.add_post('/api/fleets/{fleet}/tasks/{task}/terminal/close', terminal_close)

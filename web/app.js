@@ -111,7 +111,7 @@ function countdown(timestamp) {
 function chooseTask(id) {
   if (id !== selectedTask) { disconnectTerminal(); $('worker-terminal-output').textContent = 'Loading worker output…'; }
   selectedTask = id;localStorage.setItem('loop-task',id);
-  selectTab(localStorage.getItem('loop-tab') === 'native' ? 'native' : 'terminal'); render(); loadLogs();
+  selectTab(['native','changes'].includes(localStorage.getItem('loop-tab')) ? localStorage.getItem('loop-tab') : 'terminal'); render(); loadLogs();
   if (matchMedia('(max-width:1120px)').matches) document.querySelector('.inspector').scrollIntoView({block:'start',behavior:'smooth'});
 }
 function chooseFleet(id) {
@@ -356,7 +356,54 @@ function renderConversation(data) {
   const html=message('You',currentTask()?.goal || '')+entries.map(e=>e.html).join('');
   if(panel.dataset.content !== html) { panel.innerHTML=html; panel.dataset.content=html; }
 }
+let changesKey = '', changesPath = '', changesLoading = false, changesGeneration = 0;
+async function loadChanges() {
+  if (!selectedTask || !selectedFleet || activeTab !== 'changes') return;
+  const key = taskURL();
+  if (changesKey !== key) {
+    changesKey = key; changesPath = ''; changesLoading = false; changesGeneration++;
+    $('changes-files').textContent = 'Loading changes…';
+    $('changes-diff').replaceChildren(); $('changes-path').textContent = 'Select a file to inspect its diff.';
+    $('changes-warning').hidden = true;
+  }
+  if (changesLoading) return;
+  changesLoading = true;
+  const generation = changesGeneration;
+  try {
+    const data = await api(key + '/changes');
+    if (key !== taskURL() || generation !== changesGeneration) return;
+    const files = data.files;
+    $('changes-summary').textContent = `${files.length} changed file${files.length === 1 ? '' : 's'} · since agent started (${data.base.slice(0,8)}) · includes uncommitted edits`;
+    const list = $('changes-files');
+    const html = files.map(f => `<button class="change-file ${f.path === changesPath ? 'selected' : ''}" data-path="${escapeHTML(f.path)}"><span>${escapeHTML(f.path)}</span><small>${f.status === 'New' ? 'New file' : f.added === null ? 'Binary' : `<span class="diff-added">+${f.added}</span> <span class="diff-removed">−${f.removed}</span>`}</small></button>`).join('') || '<p class="muted">No file changes yet.</p>';
+    if (list.innerHTML !== html) list.innerHTML = html;
+    list.querySelectorAll('[data-path]').forEach(b => b.onclick = () => {
+      changesPath = b.dataset.path; changesGeneration++; changesLoading = false;
+      $('changes-path').textContent = changesPath; $('changes-diff').textContent = 'Loading diff…';
+      $('changes-warning').hidden = true; loadChanges();
+    });
+    if (!files.some(f => f.path === changesPath)) changesPath = files[0]?.path || '';
+    if (!changesPath) {
+      $('changes-path').textContent = 'No file changes yet.'; $('changes-diff').replaceChildren(); $('changes-warning').hidden = true; return;
+    }
+    list.querySelectorAll('[data-path]').forEach(b => b.classList.toggle('selected', b.dataset.path === changesPath));
+    const path = changesPath;
+    const result = await api(key + '/changes?path=' + encodeURIComponent(path));
+    if (key !== taskURL() || generation !== changesGeneration || path !== changesPath) return;
+    $('changes-path').textContent = path;
+    $('changes-warning').hidden = !result.truncated;
+    $('changes-warning').textContent = 'Large diff: showing the first 256 KB.';
+    const htmlDiff = result.diff.split('\n').map(line => `<span class="${line.startsWith('+') ? 'diff-added' : line.startsWith('-') ? 'diff-removed' : line.startsWith('@@') ? 'diff-hunk' : ''}">${escapeHTML(line)}</span>`).join('\n');
+    if ($('changes-diff').innerHTML !== htmlDiff) $('changes-diff').innerHTML = htmlDiff;
+  } catch(e) {
+    if (key === taskURL() && generation === changesGeneration) {
+      $('changes-warning').hidden = false; $('changes-warning').textContent = e.message;
+    }
+  } finally { if (generation === changesGeneration) changesLoading = false; }
+}
+$('refresh-changes').onclick = () => loadChanges();
 async function loadLogs() {
+  if (activeTab === 'changes') return loadChanges();
   if (!selectedFleet || !selectedTask || !['activity','terminal'].includes(activeTab)) return;
   const key = `${selectedFleet}/${selectedTask}`;
   try {
@@ -421,8 +468,8 @@ function selectTab(tab) {
   activeTab = tab;localStorage.setItem('loop-tab',tab);
   if(selectedTask) {localStorage.setItem('loop-task',selectedTask);const url=new URL(location.href);url.searchParams.set('agent',selectedTask);url.searchParams.set('tab',tab);history.replaceState(null,'',url.href);}
   document.querySelectorAll('[data-tab]').forEach(b => { b.classList.toggle('active', b.dataset.tab === tab); b.setAttribute('aria-selected', String(b.dataset.tab === tab)); b.tabIndex = b.dataset.tab === tab ? 0 : -1; });
-  for (const name of ['native','activity','terminal','usage','decisions']) $(name+'-panel').hidden = name !== tab;
-  if (['activity','terminal'].includes(tab)) loadLogs();
+  for (const name of ['native','activity','terminal','changes','usage','decisions']) $(name+'-panel').hidden = name !== tab;
+  if (['activity','terminal','changes'].includes(tab)) loadLogs();
   $('note-form').hidden = tab === 'native';
   if (['native','terminal'].includes(tab)) requestAnimationFrame(() => fit?.fit());
   if(tab === 'native' && currentTask()) render();
@@ -741,7 +788,7 @@ $('add-projects').onsubmit = event => { event.preventDefault(); const data = new
 loadModels().catch(e => toast(e.message,true));
 loadProjects().catch(e => toast(e.message,true));
 const initialTab=new URLSearchParams(location.search).get('tab') || localStorage.getItem('loop-tab') || 'terminal';
-selectTab(['native','activity','terminal','usage','decisions'].includes(initialTab) ? initialTab : 'terminal');
+selectTab(['native','activity','terminal','changes','usage','decisions'].includes(initialTab) ? initialTab : 'terminal');
 $('reload-interface').onclick = () => {
   if ($('note').value) sessionStorage.setItem('loop-ui-draft', JSON.stringify({task:selectedTask,text:$('note').value}));
   const url=new URL(location.href);

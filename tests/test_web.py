@@ -54,6 +54,47 @@ class WebTests(unittest.IsolatedAsyncioTestCase):
     async def post(self, path, data):
         return await self.client.post(path,json=data,headers={'X-Loop-Request':'1', 'Origin':self.origin})
 
+    async def test_changes_include_committed_staged_untracked_and_binary_files(self):
+        response = await self.post('/api/supervisor/agents', {'tasks': self.manifest['tasks']})
+        self.assertEqual(response.status, 201, await response.text())
+        entry = self.controller.supervisor()
+        run = self.controller.run_for(entry['id'], 'fix')
+        url = f"/api/fleets/{entry['id']}/tasks/fix/changes"
+        response = await self.client.get(url)
+        self.assertEqual((await response.json())['files'], [])
+        (run.worktree / 'app.py').write_text('value = 2\n')
+        subprocess.run(['git', '-C', str(run.worktree), 'add', '.'], check=True)
+        subprocess.run(['git', '-C', str(run.worktree), 'commit', '-qm', 'agent edit'], check=True)
+        (run.worktree / 'app.py').write_text('value = 3\n')
+        subprocess.run(['git', '-C', str(run.worktree), 'add', '.'], check=True)
+        name = 'new <file>\t.txt'
+        (run.worktree / name).write_text('hello <script>\n')
+        (run.worktree / 'binary.dat').write_bytes(b'\0\1\2')
+        response = await self.client.get(url)
+        self.assertEqual(response.status, 200, await response.text())
+        files = {f['path']: f for f in (await response.json())['files']}
+        self.assertEqual(files['app.py']['added'], 1)
+        self.assertEqual(files['app.py']['removed'], 1)
+        self.assertEqual(files[name]['status'], 'New')
+        response = await self.client.get(url, params={'path': 'app.py'})
+        diff = (await response.json())['diff']
+        self.assertIn('-value = 1', diff)
+        self.assertIn('+value = 3', diff)
+        response = await self.client.get(url, params={'path': name})
+        self.assertIn('+hello <script>', (await response.json())['diff'])
+        response = await self.client.get(url, params={'path': 'binary.dat'})
+        self.assertIn('Binary files', (await response.json())['diff'])
+        response = await self.client.get(url, params={'path': '../repo/app.py'})
+        self.assertEqual(response.status, 400)
+        (run.worktree / 'large.txt').write_text('x' * (300 * 1024))
+        response = await self.client.get(url, params={'path': 'large.txt'})
+        self.assertTrue((await response.json())['truncated'])
+        (run.worktree / 'link').symlink_to(self.repo / 'app.py')
+        response = await self.client.get(url, params={'path': 'link'})
+        diff = (await response.json())['diff']
+        self.assertIn('120000', diff)
+        self.assertNotIn('+value = 1', diff)
+
     async def test_delete_agent_cleans_worktree_branch_history_and_allows_reuse(self):
         task = self.manifest['tasks'][0]
         response = await self.post('/api/supervisor/agents', {'tasks': [task]})
