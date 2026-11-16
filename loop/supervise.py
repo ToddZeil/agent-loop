@@ -54,6 +54,20 @@ class LocalKeeper(Ollama):
             return False
 
 
+GOAL_TEMPLATE = Path(__file__).resolve().parent.parent / '.agent-loop' / 'goal-template.md'
+
+
+def apply_goal_template(goal, template_path=GOAL_TEMPLATE):
+    # A local template wraps every new agent's goal; {instructions} marks where it goes.
+    try:
+        template = template_path.read_text()
+    except OSError:
+        return goal
+    if '{instructions}' not in template:
+        return goal
+    return template.replace('{instructions}', goal.strip())
+
+
 class SupervisedRun(ContinuousRun):
     def __init__(self, *args, **kwargs):
         # No local model service is needed for worker supervision.
@@ -77,7 +91,7 @@ class SupervisedRun(ContinuousRun):
         options['worker_model'] = options.get('worker_models', {}).get(primary) or options.get('worker_model')
         if base == 'HEAD':
             base = self._fresh_default_branch() or base
-        return super().create(goal, base, options)
+        return super().create(apply_goal_template(goal), base, options)
 
     def _fresh_default_branch(self):
         # New agents start from the remote's latest default branch, not whatever
