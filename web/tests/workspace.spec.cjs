@@ -862,7 +862,7 @@ test('Changes lists files, renders safe diffs and refreshes', async ({page,reque
   await page.locator('#new-fleet').click();
   await page.getByLabel('Repository root',{exact:true}).fill(fixture.repo);
   await page.getByLabel('Goal',{exact:true}).fill('Inspect file changes.');
-  await page.getByRole('button',{name:'Add agents',exact:true}).click();
+  await page.locator('#create-form button[name=save]').click();
   await page.getByRole('tab',{name:'Changes',exact:true}).click();
   await expect(page.locator('#changes-files')).toContainText('No file changes yet.');
   let changed=true;
