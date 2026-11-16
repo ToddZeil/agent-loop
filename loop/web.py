@@ -713,6 +713,15 @@ async def object_body(request):
     return body
 
 
+async def goal_template(request):
+    from .supervise import GOAL_TEMPLATE
+    try:
+        template = GOAL_TEMPLATE.read_text()
+    except OSError:
+        template = ''
+    return web.json_response({'template': template if '{instructions}' in template else ''})
+
+
 async def models(request):
     c = request.app[APP_KEY]
     async with c.mutation:
@@ -1447,6 +1456,7 @@ def create_app(home, use_tmux=False):
     app.router.add_post('/api/supervisor/agents/{task}/{op:remove|restore}', supervisor_agent_action)
     app.router.add_post('/api/supervisor/{op:resume|stop}', supervisor_action)
     app.router.add_post('/api/supervisor/import', supervisor_import)
+    app.router.add_get('/api/goal-template', goal_template)
     app.router.add_get('/api/models', models)
     app.router.add_post('/api/models', models)
     app.router.add_get('/api/projects', projects)
