@@ -1444,7 +1444,8 @@ def create_app(home, use_tmux=False):
     dependencies = ASSETS / 'node_modules' / '@xterm'
     for route, path in {'xterm.js': dependencies / 'xterm' / 'lib' / 'xterm.js',
                         'xterm.css': dependencies / 'xterm' / 'css' / 'xterm.css',
-                        'fit.js': dependencies / 'addon-fit' / 'lib' / 'addon-fit.js'}.items():
+                        'fit.js': dependencies / 'addon-fit' / 'lib' / 'addon-fit.js',
+                        'web-links.js': dependencies / 'addon-web-links' / 'lib' / 'addon-web-links.js'}.items():
         app.router.add_get('/vendor/' + route, file_handler(path))
     app.router.add_get('/api/state', state)
     app.router.add_post('/api/deploy', deploy_action)

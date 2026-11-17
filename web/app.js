@@ -651,6 +651,7 @@ document.querySelectorAll('[data-tab]').forEach(b => {
     event.preventDefault(); tabs[next].focus(); selectTab(tabs[next].dataset.tab);
   };
 });
+function openTerminalLink(uri) { if(/^https?:\/\//i.test(uri)) window.open(uri,'_blank','noopener,noreferrer'); }
 function disconnectTerminal() {
   if (socket) { socket.onopen = null; socket.onclose = null; socket.onmessage = null; socket.onerror = null; socket.close(); socket = null; }
   terminal?.dispose(); terminal = null; fit = null; terminalKey = null; terminalMode=null;
@@ -664,8 +665,8 @@ async function connectTerminal(mode='shell',takeover=false) {
   terminalMode=mode;
   const mount=mode === 'agent' ? $('native-terminal') : $('terminal'); mount.hidden=false;
   if(mode === 'agent') $('native-placeholder').hidden=true;
-  terminal = new Terminal({cursorBlink:true,fontFamily:'Menlo, ui-monospace, monospace',fontSize:12,scrollback:3000,minimumContrastRatio:4.5,allowProposedApi:true,theme:TERMINAL_THEME});
-  fit = new FitAddon.FitAddon(); terminal.loadAddon(fit); terminal.open(mount); fit.fit();
+  terminal = new Terminal({cursorBlink:true,fontFamily:'Menlo, ui-monospace, monospace',fontSize:12,scrollback:3000,minimumContrastRatio:4.5,allowProposedApi:true,theme:TERMINAL_THEME,linkHandler:{activate:(event,uri)=>openTerminalLink(uri)}});
+  fit = new FitAddon.FitAddon(); terminal.loadAddon(fit); if(window.WebLinksAddon) terminal.loadAddon(new WebLinksAddon.WebLinksAddon((event,uri)=>openTerminalLink(uri))); terminal.open(mount); fit.fit();
   terminalKey = `${selectedFleet}/${selectedTask}`;
   if(mode === 'agent') terminal.writeln('Starting agent CLI…');
   socket = new WebSocket(`ws://${location.host}/api${taskURL()}/terminal?mode=${mode}${takeover ? '&takeover=1' : ''}`); socket.binaryType = 'arraybuffer';
