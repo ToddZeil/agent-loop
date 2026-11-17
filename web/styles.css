@@ -119,7 +119,7 @@ select { appearance: none; padding-right: 28px; background-image: linear-gradien
 /* ---- Top bar ---------------------------------------------------------------- */
 .workspace-bar { position: sticky; top: 0; z-index: 30; display: flex; align-items: center; gap: 18px; height: var(--bar-h); padding: 0 20px; background: var(--bar); border-bottom: 1px solid var(--line); }
 .brand { display: flex; align-items: center; gap: 9px; font-size: 21px; font-weight: 700; letter-spacing: -.04em; }
-.brand-icon { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; background: var(--accent); color: var(--accent-ink); font-size: 20px; font-weight: 500; }
+.brand-icon { width: 30px; height: 30px; border-radius: 9px; box-shadow: 0 0 0 1px rgba(255,255,255,.08), 0 4px 18px color-mix(in srgb, #3ddc84 45%, transparent); }
 .brand-dot { color: var(--accent); margin-left: -8px; }
 .supervisor-controls { display: flex; align-items: center; gap: 8px; padding-left: 18px; margin-left: 4px; border-left: 1px solid var(--line); }
 .supervisor-controls .button { padding: 6px 12px; }

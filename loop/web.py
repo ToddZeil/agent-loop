@@ -1439,7 +1439,7 @@ def create_app(home, use_tmux=False):
         async def serve(request):
             return web.FileResponse(path)
         return serve
-    for name in ('app.js', 'styles.css'):
+    for name in ('app.js', 'styles.css', 'logo.svg'):
         app.router.add_get('/' + name, file_handler(ASSETS / name))
     dependencies = ASSETS / 'node_modules' / '@xterm'
     for route, path in {'xterm.js': dependencies / 'xterm' / 'lib' / 'xterm.js',
