@@ -68,6 +68,14 @@ def apply_goal_template(goal, template_path=GOAL_TEMPLATE):
     return template.replace('{instructions}', goal.strip())
 
 
+def read_activity(path):
+    try:
+        data = json.loads(path.read_text())
+        return {'state': str(data['state']), 'at': float(data['at'])}
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
 class SupervisedRun(ContinuousRun):
     def __init__(self, *args, **kwargs):
         # No local model service is needed for worker supervision.
@@ -683,7 +691,7 @@ class Fleet:
 
     def status(self):
         return [{'id': task['id'], 'repo': task['repo'], 'worktree': str(run.worktree), 'branch': run.branch,
-                 **run.state()} for task, run in self.runs()]
+                 **run.state(), 'activity': read_activity(run.dir / 'activity.json')} for task, run in self.runs()]
 
     def note(self, task_id, text):
         for task, run in self.runs():

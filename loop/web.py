@@ -371,6 +371,8 @@ class Controller:
                 'supervisor' if result['running'] and shared.get('busy') == run_ids[task['id']] else
                 'quota' if quota_wait else 'retrying' if task['state'] == 'waiting' and task['retry_at'] else
                 'blocked' if task.get('needs_help') or task['state'] == 'waiting' else task['state']))
+            if task['signal'] == 'interactive' and task.get('activity'):
+                task['signal'] = {'working': 'working', 'idle': 'idle', 'needs_you': 'needs you'}.get(task['activity']['state'], 'interactive')
         agent_totals = combine_usage(t['usage']['agent'] for t in result['tasks'])
         supervisor_totals = combine_usage(t['usage']['supervisor'] for t in result['tasks'])
         result['usage'] = {'agents': agent_totals, 'supervisor': supervisor_totals,
