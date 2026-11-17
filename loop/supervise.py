@@ -54,6 +54,28 @@ class LocalKeeper(Ollama):
             return False
 
 
+GOAL_TEMPLATE = Path(__file__).resolve().parent.parent / '.agent-loop' / 'goal-template.md'
+
+
+def apply_goal_template(goal, template_path=GOAL_TEMPLATE):
+    # A local template wraps every new agent's goal; {instructions} marks where it goes.
+    try:
+        template = template_path.read_text()
+    except OSError:
+        return goal
+    if '{instructions}' not in template:
+        return goal
+    return template.replace('{instructions}', goal.strip())
+
+
+def read_activity(path):
+    try:
+        data = json.loads(path.read_text())
+        return {'state': str(data['state']), 'at': float(data['at'])}
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
 class SupervisedRun(ContinuousRun):
     def __init__(self, *args, **kwargs):
         # No local model service is needed for worker supervision.
@@ -70,12 +92,34 @@ class SupervisedRun(ContinuousRun):
         options = dict(options or {})
         options.pop('scope', None)
         options.pop('protected', None)
-        options.setdefault('workers', ['codex'])
+        options.setdefault('workers', ['claude'])
         options.setdefault('acceptance', [])
-        options.setdefault('review_provider', 'codex')
+        options.setdefault('review_provider', 'claude')
         primary = options['workers'][0]
         options['worker_model'] = options.get('worker_models', {}).get(primary) or options.get('worker_model')
+        if base == 'HEAD':
+            base = self._fresh_default_branch() or base
+        if options.pop('goal_template', True):
+            goal = apply_goal_template(goal)
         return super().create(goal, base, options)
+
+    def _fresh_default_branch(self):
+        # New agents start from the remote's latest default branch, not whatever
+        # feature branch the source checkout happens to be on.
+        def run(*args):
+            return subprocess.run(['git', '-C', str(self.repo), *args],
+                                  capture_output=True, text=True, timeout=120)
+        try:
+            run('fetch', '--quiet', 'origin')
+            ref = run('symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD').stdout.strip()
+            candidates = [ref] if ref else []
+            candidates += ['refs/remotes/origin/main', 'refs/remotes/origin/master']
+            for candidate in candidates:
+                if run('rev-parse', '--verify', '--quiet', candidate + '^{commit}').returncode == 0:
+                    return candidate
+        except (OSError, subprocess.SubprocessError):
+            pass
+        return None
 
     def _spawn(self, path):
         proc = super()._spawn(path)
@@ -139,7 +183,7 @@ class SupervisedRun(ContinuousRun):
         return True
 
     def _select_provider(self, state):
-        providers = self.config.get('workers', ['codex'])
+        providers = self.config.get('workers', ['claude'])
         # Prefer the current session unless returning to the configured primary.
         order = providers if self.config.get('return_to_primary', True) else list(dict.fromkeys(
             [state['provider'], *providers]))
@@ -363,7 +407,7 @@ class SupervisedRun(ContinuousRun):
 
     def _review(self, state, files):
         settings = getattr(self, '_active_supervisor_settings', None) or {
-            'provider': self.config.get('review_provider', 'codex'),
+            'provider': self.config.get('review_provider', 'claude'),
             'model': self.config.get('review_model'),
             'timeout_seconds': self.config['supervisor_max_seconds']}
         outcome = self._supervisor_turn(settings, lambda current: self._review_turn(state, files, current))
@@ -523,7 +567,7 @@ class Fleet:
         tasks = spec.get('tasks')
         if not isinstance(tasks, list) or (not tasks and not allow_empty):
             raise ValueError('Manifest needs a nonempty tasks list')
-        settings = {'provider': 'codex', 'max_interventions': 6,
+        settings = {'provider': 'claude', 'model': 'sonnet', 'max_interventions': 6,
                     'max_turns': 100, 'timeout_seconds': 300, 'effort': 'medium', **spec.get('supervisor', {})}
         parallel = spec.get('max_parallel', 4)
         if parallel is not None and (type(parallel) is not int or parallel < 1):
@@ -568,7 +612,9 @@ class Fleet:
                 raise ValueError('allow_subagents must be a boolean')
             if 'full_access' in options and type(options['full_access']) is not bool:
                 raise ValueError('full_access must be a boolean')
-            providers = options.get('workers', ['codex'])
+            if 'goal_template' in options and type(options['goal_template']) is not bool:
+                raise ValueError('goal_template must be a boolean')
+            providers = options.get('workers', ['claude'])
             if (not isinstance(providers, list) or not providers
                     or any(p not in PROVIDERS for p in providers)
                     or len(providers) != len(set(providers))):
@@ -645,7 +691,7 @@ class Fleet:
 
     def status(self):
         return [{'id': task['id'], 'repo': task['repo'], 'worktree': str(run.worktree), 'branch': run.branch,
-                 **run.state()} for task, run in self.runs()]
+                 **run.state(), 'activity': read_activity(run.dir / 'activity.json')} for task, run in self.runs()]
 
     def note(self, task_id, text):
         for task, run in self.runs():

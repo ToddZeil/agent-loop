@@ -371,6 +371,8 @@ class Controller:
                 'supervisor' if result['running'] and shared.get('busy') == run_ids[task['id']] else
                 'quota' if quota_wait else 'retrying' if task['state'] == 'waiting' and task['retry_at'] else
                 'blocked' if task.get('needs_help') or task['state'] == 'waiting' else task['state']))
+            if task['signal'] == 'interactive' and task.get('activity'):
+                task['signal'] = {'working': 'working', 'idle': 'idle', 'needs_you': 'needs you'}.get(task['activity']['state'], 'interactive')
         agent_totals = combine_usage(t['usage']['agent'] for t in result['tasks'])
         supervisor_totals = combine_usage(t['usage']['supervisor'] for t in result['tasks'])
         result['usage'] = {'agents': agent_totals, 'supervisor': supervisor_totals,
@@ -711,6 +713,15 @@ async def object_body(request):
     if not isinstance(body, dict):
         raise ValueError('Request body must be a JSON object')
     return body
+
+
+async def goal_template(request):
+    from .supervise import GOAL_TEMPLATE
+    try:
+        template = GOAL_TEMPLATE.read_text()
+    except OSError:
+        template = ''
+    return web.json_response({'template': template if '{instructions}' in template else ''})
 
 
 async def models(request):
@@ -1109,7 +1120,7 @@ async def task_settings(request):
             model = body['model'].strip() or None
             provider = state['provider']
             config.setdefault('worker_models', {})[provider] = model
-            if provider == config.get('workers', ['codex'])[0]:
+            if provider == config.get('workers', ['claude'])[0]:
                 config['worker_model'] = model
             state.update(model=model, session_id=None, retry_at=0, wait_reason='', needs_help=False,
                          state='ready' if state['state'] != 'complete' else 'complete')
@@ -1428,12 +1439,13 @@ def create_app(home, use_tmux=False):
         async def serve(request):
             return web.FileResponse(path)
         return serve
-    for name in ('app.js', 'styles.css'):
+    for name in ('app.js', 'styles.css', 'logo.svg'):
         app.router.add_get('/' + name, file_handler(ASSETS / name))
     dependencies = ASSETS / 'node_modules' / '@xterm'
     for route, path in {'xterm.js': dependencies / 'xterm' / 'lib' / 'xterm.js',
                         'xterm.css': dependencies / 'xterm' / 'css' / 'xterm.css',
-                        'fit.js': dependencies / 'addon-fit' / 'lib' / 'addon-fit.js'}.items():
+                        'fit.js': dependencies / 'addon-fit' / 'lib' / 'addon-fit.js',
+                        'web-links.js': dependencies / 'addon-web-links' / 'lib' / 'addon-web-links.js'}.items():
         app.router.add_get('/vendor/' + route, file_handler(path))
     app.router.add_get('/api/state', state)
     app.router.add_post('/api/deploy', deploy_action)
@@ -1447,6 +1459,7 @@ def create_app(home, use_tmux=False):
     app.router.add_post('/api/supervisor/agents/{task}/{op:remove|restore}', supervisor_agent_action)
     app.router.add_post('/api/supervisor/{op:resume|stop}', supervisor_action)
     app.router.add_post('/api/supervisor/import', supervisor_import)
+    app.router.add_get('/api/goal-template', goal_template)
     app.router.add_get('/api/models', models)
     app.router.add_post('/api/models', models)
     app.router.add_get('/api/projects', projects)

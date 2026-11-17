@@ -651,6 +651,7 @@ document.querySelectorAll('[data-tab]').forEach(b => {
     event.preventDefault(); tabs[next].focus(); selectTab(tabs[next].dataset.tab);
   };
 });
+function openTerminalLink(uri) { if(/^https?:\/\//i.test(uri)) window.open(uri,'_blank','noopener,noreferrer'); }
 function disconnectTerminal() {
   if (socket) { socket.onopen = null; socket.onclose = null; socket.onmessage = null; socket.onerror = null; socket.close(); socket = null; }
   terminal?.dispose(); terminal = null; fit = null; terminalKey = null; terminalMode=null;
@@ -664,8 +665,8 @@ async function connectTerminal(mode='shell',takeover=false) {
   terminalMode=mode;
   const mount=mode === 'agent' ? $('native-terminal') : $('terminal'); mount.hidden=false;
   if(mode === 'agent') $('native-placeholder').hidden=true;
-  terminal = new Terminal({cursorBlink:true,fontFamily:'Menlo, ui-monospace, monospace',fontSize:12,scrollback:3000,minimumContrastRatio:4.5,allowProposedApi:true,theme:TERMINAL_THEME});
-  fit = new FitAddon.FitAddon(); terminal.loadAddon(fit); terminal.open(mount); fit.fit();
+  terminal = new Terminal({cursorBlink:true,fontFamily:'Menlo, ui-monospace, monospace',fontSize:12,scrollback:3000,minimumContrastRatio:4.5,allowProposedApi:true,theme:TERMINAL_THEME,linkHandler:{activate:(event,uri)=>openTerminalLink(uri)}});
+  fit = new FitAddon.FitAddon(); terminal.loadAddon(fit); if(window.WebLinksAddon) terminal.loadAddon(new WebLinksAddon.WebLinksAddon((event,uri)=>openTerminalLink(uri))); terminal.open(mount); fit.fit();
   terminalKey = `${selectedFleet}/${selectedTask}`;
   if(mode === 'agent') terminal.writeln('Starting agent CLI…');
   socket = new WebSocket(`ws://${location.host}/api${taskURL()}/terminal?mode=${mode}${takeover ? '&takeover=1' : ''}`); socket.binaryType = 'arraybuffer';
@@ -769,14 +770,27 @@ function updateAgentNames() {
     row.querySelector('.agent-name-preview').textContent = goal ? `Name: ${agentField(row, 'id').value.trim() || row.dataset.defaultId}` : 'Name is generated from your goal.';
   });
 }
+let goalTemplatePromise;
+function goalTemplate() { return goalTemplatePromise ||= api('/goal-template').then(r=>r.template||'').catch(()=>''); }
+async function showGoalTemplate(row) {
+  const template=await goalTemplate(), box=row.querySelector('[data-goal-template]');
+  if(!template || !box) return;
+  const goal=row.querySelector('[data-field="goal"]'), preview=box.querySelector('[data-goal-preview]');
+  const steps=[...template.matchAll(/^\s*\d+\.\s*Run\s+(\/[\w-]+)/gm)].map(m=>m[1]);
+  if(steps.length) box.querySelector('[data-goal-template-label]').textContent='Wrap in goal template · '+steps.join(' → ');
+  const toggle=box.querySelector('[data-field="goal-template"]'), details=box.querySelector('details');
+  toggle.addEventListener('change',()=>{ details.hidden=!toggle.checked; });
+  const update=()=>{ preview.textContent=template.split('{instructions}').join(goal.value.trim() || '…your goal…'); };
+  goal.addEventListener('input',update); update(); box.hidden=false;
+}
 function addTask() {
   taskNumber++;
   const row = document.createElement('section'); row.className = 'task-fields';
-  row.innerHTML = `<div class="task-field-head"><span>AGENT ${String(taskNumber).padStart(2,'0')}</span><button type="button" class="icon-button remove-task" aria-label="Remove agent form">×</button></div><label>Saved project<select data-field="project" aria-label="Saved project"><option value="">Choose a saved repository, or enter a path…</option></select></label><label data-manual-repo>Repository root<input data-field="repo" placeholder="/Users/you/projects/app" required></label><label>Goal<textarea data-field="goal" rows="3" placeholder="What would you like this agent to do?" required></textarea></label><div class="form-row three"><label>Provider<select data-field="provider"><option>codex</option><option>claude</option><option>antigravity</option><option>muse</option></select></label><label>Model<input data-field="model" placeholder="Provider default"></label><label>Effort<select data-field="effort" aria-label="Worker effort"><option>medium</option></select></label></div><div class="attach-zone" data-attach tabindex="0"><span>Attach images or files: drop, paste (⌘V) or <button type="button" class="link-button" data-attach-pick>choose</button></span><input type="file" multiple hidden data-attach-input><ul class="attach-list"></ul></div><fieldset class="permission-group"><legend>Permissions</legend><label class="permission-card"><input type="checkbox" data-field="allow-subagents" checked><span><strong>Allow subagents</strong><small>The agent can delegate parts of the task to helper agents in its worktree.</small></span></label><label class="permission-card"><input type="checkbox" data-field="full-access" checked><span><strong>Full access</strong><small>Runs without tool approval prompts.</small></span></label></fieldset><small class="muted agent-name-preview" aria-live="polite">Name is generated from your goal.</small>`;
+  row.innerHTML = `<div class="task-field-head"><span>AGENT ${String(taskNumber).padStart(2,'0')}</span><button type="button" class="icon-button remove-task" aria-label="Remove agent form">×</button></div><label>Saved project<select data-field="project" aria-label="Saved project"><option value="">Choose a saved repository, or enter a path…</option></select></label><label data-manual-repo>Repository root<input data-field="repo" placeholder="/Users/you/projects/app" required></label><label>Goal<textarea data-field="goal" rows="3" placeholder="What would you like this agent to do?" required></textarea></label><div class="goal-template" data-goal-template hidden><label class="goal-template-toggle"><input type="checkbox" data-field="goal-template" checked><span data-goal-template-label>Wrap in goal template · /jira → /goal → /prepare-pr</span></label><details><summary>Preview</summary>Wrapped in goal template · /jira → /goal → /prepare-pr</summary><pre data-goal-preview></pre><small class="muted">Edit or remove .agent-loop/goal-template.md in the agent-loop folder.</small></details></div><div class="form-row three"><label>Provider<select data-field="provider"><option>claude</option><option>codex</option><option>antigravity</option><option>muse</option></select></label><label>Model<input data-field="model" placeholder="Provider default"></label><label>Effort<select data-field="effort" aria-label="Worker effort"><option>medium</option></select></label></div><div class="attach-zone" data-attach tabindex="0"><span>Attach images or files: drop, paste (⌘V) or <button type="button" class="link-button" data-attach-pick>choose</button></span><input type="file" multiple hidden data-attach-input><ul class="attach-list"></ul></div><fieldset class="permission-group"><legend>Permissions</legend><label class="permission-card"><input type="checkbox" data-field="allow-subagents" checked><span><strong>Allow subagents</strong><small>The agent can delegate parts of the task to helper agents in its worktree.</small></span></label><label class="permission-card"><input type="checkbox" data-field="full-access" checked><span><strong>Full access</strong><small>Runs without tool approval prompts.</small></span></label></fieldset><small class="muted agent-name-preview" aria-live="polite">Name is generated from your goal.</small>`;
   const options = document.createElement('section'); options.className = 'task-options'; row._options = options;
-  options.innerHTML = `<h4>Agent ${String(taskNumber).padStart(2,'0')}</h4><label>Agent ID<input data-field="id" pattern="[a-z0-9](?:[a-z0-9]|-){0,60}" placeholder="Generated automatically"></label><label>Verification command (optional)<input data-field="check" placeholder="For example: npm test"></label><small class="muted">Leave empty to use supervisor review.</small><div class="form-row"><label>Fallback provider<select data-field="fallback"><option value="">Wait for quota reset</option><option>codex</option><option>claude</option><option>antigravity</option><option>muse</option></select></label><label>Fallback model<input data-field="fallback-model" placeholder="Provider default"></label></div>`;
+  options.innerHTML = `<h4>Agent ${String(taskNumber).padStart(2,'0')}</h4><label>Agent ID<input data-field="id" pattern="[a-z0-9](?:[a-z0-9]|-){0,60}" placeholder="Generated automatically"></label><label>Verification command (optional)<input data-field="check" placeholder="For example: npm test"></label><small class="muted">Leave empty to use supervisor review.</small><div class="form-row"><label>Fallback provider<select data-field="fallback"><option value="">Wait for quota reset</option><option>claude</option><option>codex</option><option>antigravity</option><option>muse</option></select></label><label>Fallback model<input data-field="fallback-model" placeholder="Provider default"></label></div>`;
   row.querySelector('.remove-task').onclick = () => { if ($('task-fields').children.length > 1) { options.remove(); row.remove(); updateAgentNames(); } else toast('Add at least one agent.', true); };
-  $('task-fields').append(row); $('task-options').append(options);
+  $('task-fields').append(row); $('task-options').append(options); showGoalTemplate(row);
   row.querySelector('[data-field=project]').onchange = event => {
     row.querySelector('[data-field=repo]').value = event.target.value;
     row.querySelector('[data-manual-repo]').hidden = !!event.target.value;
@@ -854,7 +868,7 @@ $('create-form').onsubmit = async event => {
         if (get('model')) worker_models[provider] = get('model');
         if (fallback && fallback !== provider) { workers.push(fallback); if (get('fallback-model')) worker_models[fallback] = get('fallback-model'); }
         const attachments = await Promise.all((row._files || []).map(async f => ({name:f.name,data:await fileToBase64(f)})));
-        return {id:get('id') || row.dataset.defaultId,repo:get('repo'),goal:get('goal'),attachments,acceptance:get('check') ? [get('check')] : [],options:{workers,worker_models,worker_effort:get('effort'),full_access:agentField(row,'full-access').checked,allow_subagents:agentField(row,'allow-subagents').checked}};
+        return {id:get('id') || row.dataset.defaultId,repo:get('repo'),goal:get('goal'),attachments,acceptance:get('check') ? [get('check')] : [],options:{workers,worker_models,worker_effort:get('effort'),full_access:agentField(row,'full-access').checked,allow_subagents:agentField(row,'allow-subagents').checked,...(agentField(row,'goal-template')?.closest('[data-goal-template]')?.hidden===false?{goal_template:agentField(row,'goal-template').checked}:{})}};
       }));
     }
     for (const task of tasks) for (const [provider, model] of Object.entries(task.options?.worker_models || {})) await saveModel(provider, model);

@@ -117,6 +117,25 @@ def discover_session(worktree, opened_at, exclude=()):
     return ids.pop() if len(ids) == 1 else None
 
 
+def activity_hooks(path):
+    # Claude reports its own turn state; the dashboard reads it to tell working from idle.
+    def write(state):
+        return {'type': 'command', 'command': "printf '{\"state\":\"%s\",\"at\":%%s}\\n' \"$(date +%%s)\" > %s" % (state, shlex.quote(str(path)))}
+    def on(state, matcher=None):
+        entry = {'hooks': [write(state)]}
+        if matcher:
+            entry['matcher'] = matcher
+        return entry
+    return {'hooks': {
+        'SessionStart': [on('idle')],
+        'UserPromptSubmit': [on('working')],
+        'PreToolUse': [on('working')],
+        'PostToolUse': [on('working')],
+        'Stop': [on('idle')],
+        'Notification': [on('needs_you', 'permission_prompt|elicitation_dialog'), on('idle', 'idle_prompt')],
+    }}
+
+
 def agent_terminal_command(run, config=None):
     config = config or terminal_config(run)
     provider = config['provider']
@@ -151,6 +170,7 @@ def agent_terminal_command(run, config=None):
             argv += ['--model', model]
         if not run.config.get('allow_subagents', True):
             argv += ['--disallowedTools', 'Agent']
+        argv += ['--settings', json.dumps(activity_hooks(run.dir / 'activity.json'))]
     elif provider == 'antigravity':
         argv = ['agy', '--add-dir', str(run.worktree)]
         if full_access:
