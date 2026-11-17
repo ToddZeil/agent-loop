@@ -68,6 +68,11 @@ def failure_key(command, code, output):
     return hashlib.sha256(json.dumps([command, code, normalized[-12000:]]).encode()).hexdigest()
 
 
+CROSS_REPO_NOTICE = (" The operator allowed cross-repository work for this agent: you may read and edit "
+                     "other repositories on this machine when the objective needs them. Name every "
+                     "repository you changed in your reply.")
+
+
 class ContinuousRun(LiteRun):
     def state(self):
         path = self.path("continuous.json")
@@ -258,7 +263,8 @@ class ContinuousRun(LiteRun):
         protected = self.config.get("protected") or []
         recent = state["check_evidence"][-2:]
         parts = ["OBJECTIVE\n" + goal,
-                 "Allowed repository roots: " + json.dumps(scope),
+                 "Allowed repository roots: " + json.dumps(scope)
+                 + (CROSS_REPO_NOTICE if self.config.get("cross_repo") else ""),
                  "Protected paths: " + json.dumps(protected),
                  "Objective acceptance commands (keeper owned): " + json.dumps(self.config.get("acceptance", [])),
                  "Keep a short checklist in your reply; continue implementation and run focused checks.",
