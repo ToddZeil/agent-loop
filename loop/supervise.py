@@ -18,7 +18,8 @@ from .lite import changed_files, extract_verdict
 from .keeper import Scribe, Ollama
 from .storage import atomic_json
 from .usage import record as record_usage
-from .worker import terminal_owner_path
+from .tmux_session import TmuxSession
+from .worker import legacy_workspace_lock_path, terminal_owner_path, workspace_lock_path
 
 PROVIDERS = ('codex', 'claude', 'antigravity', 'muse')
 EFFORTS = ('low', 'medium', 'high', 'xhigh', 'max', 'ultra')
@@ -340,6 +341,7 @@ class SupervisedRun(ContinuousRun):
         prompt = json.dumps({'objective': self.path('goal.md').read_text(),
                              'supervisor_handoff': settings.get('_handoff', ''),
                              'scope': self.config.get('scope', ['.']),
+                             'cross_repo_allowed': bool(self.config.get('cross_repo')),
                              'protected': self.config.get('protected', []),
                              'blocker': state['wait_reason'],
                              'worker_response': state.get('last_response', ''),
@@ -437,6 +439,7 @@ class SupervisedRun(ContinuousRun):
         diff, _ = self.diff_text(60000)
         prompt = 'Read-only objective review. Inspect the result and relevant repository files.\n' + json.dumps({
             'goal': self.path('goal.md').read_text(), 'operator_notes': state.get('operator_notes', [])[-5:], 'changed_files': files[:200],
+            'cross_repo_allowed': bool(self.config.get('cross_repo')),
             'diff_sample': diff, 'worker_result': state.get('last_response') or state.get('handoff', ''),
             'check_evidence': state.get('check_evidence', []),
             'previous_review': state.get('review_feedback', []), 'handoff': settings.get('_handoff', '')})
@@ -552,6 +555,21 @@ class SupervisedRun(ContinuousRun):
                 self._launch(state)
 
 
+def worktree_has_processes(worktree):
+    """True if any process runs in, or names, the worktree. Fails closed."""
+    root = str(Path(worktree).resolve())
+    try:
+        cwds = subprocess.run(['lsof', '-nP', '-d', 'cwd', '-Fn'], capture_output=True,
+                              text=True, timeout=30, check=True).stdout.splitlines()
+        commands = subprocess.run(['ps', '-axo', 'command'], capture_output=True,
+                                  text=True, timeout=30, check=True).stdout.splitlines()
+    except (OSError, subprocess.SubprocessError):
+        return True
+    inside = (root, root + '/')
+    return (any(line[1:] == root or line[1:].startswith(inside[1]) for line in cwds if line[:1] == 'n')
+            or any(root in line for line in commands))
+
+
 def git(repo, *args):
     return subprocess.check_output(['git', '-C', str(repo), *args], text=True).strip()
 
@@ -612,6 +630,8 @@ class Fleet:
                 raise ValueError('allow_subagents must be a boolean')
             if 'full_access' in options and type(options['full_access']) is not bool:
                 raise ValueError('full_access must be a boolean')
+            if 'cross_repo' in options and type(options['cross_repo']) is not bool:
+                raise ValueError('cross_repo must be a boolean')
             if 'goal_template' in options and type(options['goal_template']) is not bool:
                 raise ValueError('goal_template must be a boolean')
             providers = options.get('workers', ['claude'])
@@ -676,6 +696,54 @@ class Fleet:
         task['enabled'] = enabled
         atomic_json(self.manifest, spec)
 
+    def withdraw_unclaimed_handoff(self, task, run):
+        """Take back a terminal request nobody holds once a message is waiting.
+
+        A requested terminal makes the manager stop reading the agent's inbox. If the
+        terminal never opened, or its tmux server died and left the ownership record
+        behind, every message is stuck behind a handoff that is not happening. A dead
+        tmux server alone does not prove its descendants exited, so a leftover record
+        is cleared only when no process is running in the worktree either.
+        """
+        state = run.state()
+        if (state.get('interactive_session') or state.get('attempt')
+                or run.path('native-session.json').exists()):
+            return False
+        try:
+            unread = len(run.path('inbox.jsonl').read_text().splitlines())
+        except FileNotFoundError:
+            return False
+        if unread <= state.get('inbox_seen', 0):
+            return False
+        lock_paths = [run.path('keeper.lock'), *dict.fromkeys(
+            (workspace_lock_path(run.dir, run.worktree),
+             legacy_workspace_lock_path(run.dir, run.worktree)))]
+        with ExitStack() as stack:
+            for path in lock_paths:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                handle = stack.enter_context(path.open('a'))
+                try:
+                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    return False  # A live owner holds the agent; its terminal keeps the messages.
+            if terminal_owner_path(run.dir, run.worktree).exists():
+                try:
+                    session = TmuxSession.recover(run.dir, run.worktree)
+                    if session.alive() or worktree_has_processes(run.worktree):
+                        return False
+                    session.reconcile(verified_no_writers=True)
+                except (OSError, RuntimeError, ValueError):
+                    return False
+            spec = read(self.manifest)
+            current = next((t for t in spec['tasks'] if t['id'] == task['id']), None)
+            if current is None or not current.get('terminal_requested'):
+                return False
+            current['terminal_requested'] = False
+            atomic_json(self.manifest, spec)
+        run.journal('terminal_request_withdrawn',
+                    reason='messages were waiting and no terminal was running')
+        return True
+
     def runs(self):
         for task in read(self.manifest)['tasks']:
             yield task, SupervisedRun(task['repo'], task['run_id'])
@@ -739,6 +807,10 @@ class Fleet:
                             ready.parent.mkdir(parents=True, exist_ok=True)
                             ready.touch()
                             continue
+                        if (task.get('terminal_requested') and task['id'] not in pending
+                                and task['id'] not in owners
+                                and self.withdraw_unclaimed_handoff(task, fresh)):
+                            task = {**task, 'terminal_requested': False}
                         if (task.get('terminal_requested') and task['id'] not in pending
                                 and not current['attempt'] and current['state'] not in ('working', 'verifying', 'commit_pending')):
                             owner = owners.pop(task['id'], None)
