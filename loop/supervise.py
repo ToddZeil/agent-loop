@@ -91,7 +91,9 @@ class SupervisedRun(ContinuousRun):
         options['worker_model'] = options.get('worker_models', {}).get(primary) or options.get('worker_model')
         if base == 'HEAD':
             base = self._fresh_default_branch() or base
-        return super().create(apply_goal_template(goal), base, options)
+        if options.pop('goal_template', True):
+            goal = apply_goal_template(goal)
+        return super().create(goal, base, options)
 
     def _fresh_default_branch(self):
         # New agents start from the remote's latest default branch, not whatever
@@ -602,6 +604,8 @@ class Fleet:
                 raise ValueError('allow_subagents must be a boolean')
             if 'full_access' in options and type(options['full_access']) is not bool:
                 raise ValueError('full_access must be a boolean')
+            if 'goal_template' in options and type(options['goal_template']) is not bool:
+                raise ValueError('goal_template must be a boolean')
             providers = options.get('workers', ['claude'])
             if (not isinstance(providers, list) or not providers
                     or any(p not in PROVIDERS for p in providers)
