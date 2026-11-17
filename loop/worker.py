@@ -231,7 +231,7 @@ def run_attempt(record_path):
                 task["provider"], record["prompt"], task.get("model"), task.get("effort"),
                 record.get("session_id"), workspace,
                 allow_subagents=task.get("allow_subagents", True), full_access=task.get("full_access", True),
-                allow_git=task.get("allow_git", False))
+                allow_git=task.get("allow_git", True))
                 if continuous else command(task["provider"], build_prompt(record),
                                            task.get("model"), task.get("effort"),
                                            sandbox=record.get("sandbox", False),

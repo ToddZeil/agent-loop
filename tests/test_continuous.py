@@ -52,7 +52,8 @@ class ContinuousTests(ContinuousBase):
         config["allow_git"] = value
         self.run.save("config.json", config)
 
-    def test_worker_commits_are_foreign_history_unless_git_is_allowed(self):
+    def test_worker_commits_are_foreign_history_when_git_is_forbidden(self):
+        self.allow_git(False)
         head = self.commit_in_worktree()
         state = self.run.state()
         self.run._adopt_worker_git_history(state)
@@ -60,8 +61,7 @@ class ContinuousTests(ContinuousBase):
         self.assertFalse(self.run._verify(state))
         self.assertIn("unexpected Git history", self.run.state()["wait_reason"])
 
-    def test_allowed_git_adopts_the_head_the_worker_left_and_completes_without_a_second_commit(self):
-        self.allow_git()
+    def test_git_is_allowed_by_default_and_adopts_the_head_the_worker_left_without_a_second_commit(self):
         head = self.commit_in_worktree()
         state = self.run.state()
         state["state"] = "verifying"

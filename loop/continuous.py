@@ -285,7 +285,7 @@ class ContinuousRun(LiteRun):
 
     def _adopt_worker_git_history(self, state):
         """With allow_git, accept the HEAD a worker left instead of treating it as foreign."""
-        if not self.config.get("allow_git"):
+        if not self.config.get("allow_git", True):
             return
         head = git(self.worktree, "rev-parse", "HEAD")
         if head != state["accepted_commit"]:
@@ -314,7 +314,7 @@ class ContinuousRun(LiteRun):
                   "task": {"provider": state["provider"], "model": state["model"], "effort": (self.config.get("worker_effort") or "medium"),
                            "full_access": self.config.get("full_access", True),
                            "allow_subagents": self.config.get("allow_subagents", True),
-                           "allow_git": bool(self.config.get("allow_git"))}}
+                           "allow_git": bool(self.config.get("allow_git", True))}}
         path = self.path("attempts") / (attempt_id + ".json")
         atomic_json(path, record)
         state.update(state="working", attempt=attempt_id, next_action="reconcile worker")
@@ -391,7 +391,7 @@ class ContinuousRun(LiteRun):
         if not objective_evidence:
             if not self._review(state, files):
                 return False
-        committed_by_worker = bool(self.config.get("allow_git")) and state["accepted_commit"] != state["base"]
+        committed_by_worker = bool(self.config.get("allow_git", True)) and state["accepted_commit"] != state["base"]
         if not files and not committed_by_worker:
             self._wait(state, "acceptance passed without a delivered worktree change")
             return False

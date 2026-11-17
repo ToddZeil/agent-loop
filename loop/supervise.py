@@ -344,7 +344,7 @@ class SupervisedRun(ContinuousRun):
                              'supervisor_handoff': settings.get('_handoff', ''),
                              'scope': self.config.get('scope', ['.']),
                              'cross_repo_allowed': bool(self.config.get('cross_repo')),
-                             'git_allowed': bool(self.config.get('allow_git')),
+                             'git_allowed': bool(self.config.get('allow_git', True)),
                              'protected': self.config.get('protected', []),
                              'blocker': state['wait_reason'],
                              'worker_response': state.get('last_response', ''),
@@ -443,7 +443,7 @@ class SupervisedRun(ContinuousRun):
         prompt = 'Read-only objective review. Inspect the result and relevant repository files.\n' + json.dumps({
             'goal': self.path('goal.md').read_text(), 'operator_notes': state.get('operator_notes', [])[-5:], 'changed_files': files[:200],
             'cross_repo_allowed': bool(self.config.get('cross_repo')),
-            'git_allowed': bool(self.config.get('allow_git')),
+            'git_allowed': bool(self.config.get('allow_git', True)),
             'diff_sample': diff, 'worker_result': state.get('last_response') or state.get('handoff', ''),
             'check_evidence': state.get('check_evidence', []),
             'previous_review': state.get('review_feedback', []), 'handoff': settings.get('_handoff', '')})
