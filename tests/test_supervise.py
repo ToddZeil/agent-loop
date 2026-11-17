@@ -137,6 +137,7 @@ class SuperviseTests(unittest.TestCase):
         self.assertTrue(self.fleet.normalized(spec,self.source.parent)['tasks'][0]['options']['cross_repo'])
 
     def test_message_takes_back_a_terminal_request_that_never_opened(self):
+        patcher=mock.patch('loop.supervise.HANDOFF_GRACE_SECONDS',0);patcher.start();self.addCleanup(patcher.stop)
         self.request_terminal()
         self.fleet.note('one','Please continue')
         with mock.patch.object(SupervisedRun,'step',autospec=True) as step:
@@ -144,6 +145,13 @@ class SuperviseTests(unittest.TestCase):
         self.assertFalse(self.requested())
         self.assertIn(self.run_for('one').dir,[call.args[0].dir for call in step.call_args_list])
         self.assertIn('terminal_request_withdrawn',self.run_for('one').path('journal.jsonl').read_text())
+
+    def test_a_just_requested_terminal_is_not_withdrawn_for_a_waiting_message(self):
+        self.request_terminal()
+        self.fleet.note('one','Please continue')
+        with mock.patch.object(SupervisedRun,'step',autospec=True):
+            self.fleet.run(once=True)
+        self.assertTrue(self.requested())
 
     def test_message_leaves_an_open_terminal_alone(self):
         self.request_terminal()
@@ -163,6 +171,7 @@ class SuperviseTests(unittest.TestCase):
         return marker
 
     def test_message_clears_a_dead_terminals_record_when_nothing_runs_in_the_worktree(self):
+        patcher=mock.patch('loop.supervise.HANDOFF_GRACE_SECONDS',0);patcher.start();self.addCleanup(patcher.stop)
         self.request_terminal()
         run=self.run_for('one');self.leave_dead_terminal_record(run)
         self.fleet.note('one','Please continue')
@@ -175,6 +184,7 @@ class SuperviseTests(unittest.TestCase):
         self.assertFalse(self.requested())
 
     def test_message_keeps_a_dead_terminals_record_while_a_process_runs_in_the_worktree(self):
+        patcher=mock.patch('loop.supervise.HANDOFF_GRACE_SECONDS',0);patcher.start();self.addCleanup(patcher.stop)
         self.request_terminal()
         run=self.run_for('one');marker=self.leave_dead_terminal_record(run)
         self.fleet.note('one','Please continue')
