@@ -283,10 +283,22 @@ class ContinuousRun(LiteRun):
             parts.append("Repeated unchanged check failure. Diagnose the exact cause and change strategy once.")
         return "\n\n".join(parts)
 
+    def _adopt_worker_git_history(self, state):
+        """With allow_git, accept the HEAD a worker left instead of treating it as foreign."""
+        if not self.config.get("allow_git"):
+            return
+        head = git(self.worktree, "rev-parse", "HEAD")
+        if head != state["accepted_commit"]:
+            self.journal("git_history_adopted", old=state["accepted_commit"], new=head,
+                         branch=git(self.worktree, "rev-parse", "--abbrev-ref", "HEAD"))
+            state["accepted_commit"] = head
+            self.save_state(state)
+
     def _launch(self, state):
         if self._owner_present():
             self._wait(state, "workspace ownership uncertain; existing worker lock is held")
             return
+        self._adopt_worker_git_history(state)
         if git(self.worktree, "rev-parse", "HEAD") != state["accepted_commit"]:
             self._wait(state, "unexpected Git history; inspect worktree before resuming")
             return
@@ -301,7 +313,8 @@ class ContinuousRun(LiteRun):
                   "worker_max_seconds": self.config["worker_max_seconds"],
                   "task": {"provider": state["provider"], "model": state["model"], "effort": (self.config.get("worker_effort") or "medium"),
                            "full_access": self.config.get("full_access", True),
-                           "allow_subagents": self.config.get("allow_subagents", True)}}
+                           "allow_subagents": self.config.get("allow_subagents", True),
+                           "allow_git": bool(self.config.get("allow_git"))}}
         path = self.path("attempts") / (attempt_id + ".json")
         atomic_json(path, record)
         state.update(state="working", attempt=attempt_id, next_action="reconcile worker")
@@ -324,6 +337,7 @@ class ContinuousRun(LiteRun):
     @worktree_admitted
     def _verify(self, state):
         files = changed_files(self.worktree)
+        self._adopt_worker_git_history(state)
         if git(self.worktree, "rev-parse", "HEAD") != state["accepted_commit"]:
             self._wait(state, "unexpected Git history during verification")
             return False
@@ -377,12 +391,20 @@ class ContinuousRun(LiteRun):
         if not objective_evidence:
             if not self._review(state, files):
                 return False
-        if not files:
+        committed_by_worker = bool(self.config.get("allow_git")) and state["accepted_commit"] != state["base"]
+        if not files and not committed_by_worker:
             self._wait(state, "acceptance passed without a delivered worktree change")
             return False
         if self._tree_fingerprint() != before or git(self.worktree, "rev-parse", "HEAD") != state["accepted_commit"]:
             self._wait(state, "verification changed worktree content or Git history")
             return False
+        if not files:
+            state.update(state="complete", completed_at=self.clock(), next_action="none", wait_reason="")
+            state["progress"].append({"at": self.clock(), "kind": "objective acceptance passed",
+                                      "checks": checks, "commit": state["accepted_commit"]})
+            self.save_state(state)
+            self.journal("complete", commit=state["accepted_commit"], committed_by="worker")
+            return True
         state.update(state="commit_pending", verified_tree=before)
         self.save_state(state)
         inherited_locks = getattr(getattr(self, '_admission_local', None), 'fds', ())

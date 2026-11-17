@@ -41,6 +41,44 @@ class ContinuousBase(unittest.TestCase):
 
 
 class ContinuousTests(ContinuousBase):
+    def commit_in_worktree(self):
+        (self.run.worktree / "app.py").write_text("value = 2\n")
+        git(self.run.worktree, "add", "app.py")
+        git(self.run.worktree, "commit", "-qm", "worker commit")
+        return git(self.run.worktree, "rev-parse", "HEAD")
+
+    def allow_git(self, value=True):
+        config = self.run.load("config.json")
+        config["allow_git"] = value
+        self.run.save("config.json", config)
+
+    def test_worker_commits_are_foreign_history_unless_git_is_allowed(self):
+        head = self.commit_in_worktree()
+        state = self.run.state()
+        self.run._adopt_worker_git_history(state)
+        self.assertNotEqual(self.run.state()["accepted_commit"], head)
+        self.assertFalse(self.run._verify(state))
+        self.assertIn("unexpected Git history", self.run.state()["wait_reason"])
+
+    def test_allowed_git_adopts_the_head_the_worker_left_and_completes_without_a_second_commit(self):
+        self.allow_git()
+        head = self.commit_in_worktree()
+        state = self.run.state()
+        state["state"] = "verifying"
+        self.assertTrue(self.run._verify(state))
+        final = self.run.state()
+        self.assertEqual(final["state"], "complete")
+        self.assertEqual(final["accepted_commit"], head)
+        self.assertEqual(git(self.run.worktree, "rev-parse", "HEAD"), head)
+
+    def test_git_rule_is_strict_by_default_and_lifted_only_with_full_access(self):
+        from loop.adapters import command
+        def prompt(**options):
+            return " ".join(command("claude", "x", scope="worktree", **options))
+        self.assertIn("Do not commit or change branches", prompt(full_access=True))
+        self.assertIn("You may commit, rebase", prompt(full_access=True, allow_git=True))
+        self.assertIn("Do not commit or change branches", prompt(full_access=False, allow_git=True))
+
     def test_cross_repo_work_is_announced_to_the_worker_only_when_allowed(self):
         state = self.run.state()
         self.assertNotIn("cross-repository", self.run._prompt(state))
