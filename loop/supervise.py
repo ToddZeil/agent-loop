@@ -344,6 +344,7 @@ class SupervisedRun(ContinuousRun):
                              'supervisor_handoff': settings.get('_handoff', ''),
                              'scope': self.config.get('scope', ['.']),
                              'cross_repo_allowed': bool(self.config.get('cross_repo')),
+                             'git_allowed': bool(self.config.get('allow_git', True)),
                              'protected': self.config.get('protected', []),
                              'blocker': state['wait_reason'],
                              'worker_response': state.get('last_response', ''),
@@ -442,6 +443,7 @@ class SupervisedRun(ContinuousRun):
         prompt = 'Read-only objective review. Inspect the result and relevant repository files.\n' + json.dumps({
             'goal': self.path('goal.md').read_text(), 'operator_notes': state.get('operator_notes', [])[-5:], 'changed_files': files[:200],
             'cross_repo_allowed': bool(self.config.get('cross_repo')),
+            'git_allowed': bool(self.config.get('allow_git', True)),
             'diff_sample': diff, 'worker_result': state.get('last_response') or state.get('handoff', ''),
             'check_evidence': state.get('check_evidence', []),
             'previous_review': state.get('review_feedback', []), 'handoff': settings.get('_handoff', '')})
@@ -632,6 +634,8 @@ class Fleet:
                 raise ValueError('allow_subagents must be a boolean')
             if 'full_access' in options and type(options['full_access']) is not bool:
                 raise ValueError('full_access must be a boolean')
+            if 'allow_git' in options and type(options['allow_git']) is not bool:
+                raise ValueError('allow_git must be a boolean')
             if 'cross_repo' in options and type(options['cross_repo']) is not bool:
                 raise ValueError('cross_repo must be a boolean')
             if 'goal_template' in options and type(options['goal_template']) is not bool:

@@ -213,8 +213,14 @@ def run_process(argv, cwd, timeout=180, stdin=None, idle_timeout=None, activity=
     return proc.returncode, out, err
 
 
+GIT_STRICT = "Do not commit or change branches. "
+GIT_ALLOWED = ("You may commit, rebase, merge, push and switch branches when the objective needs "
+               "it; the keeper adopts whatever HEAD you leave and verifies it. ")
+
+
 def command(provider, prompt, model=None, effort=None, worker=True, sandbox=False,
-            workspace=None, scope="files", allow_subagents=False, full_access=False):
+            workspace=None, scope="files", allow_subagents=False, full_access=False,
+            allow_git=False):
     effort = effort or (model.rsplit("-", 1)[-1]
                         if provider == "antigravity" and model
                         and model.rsplit("-", 1)[-1] in ("low", "medium", "high")
@@ -228,7 +234,7 @@ def command(provider, prompt, model=None, effort=None, worker=True, sandbox=Fals
         prompt += ("\n\nExecution constraint: " + delegation +
                    "You may read and edit any file in this worktree and "
                    "run builds, tests, generators and dependency installs (for example "
-                   "`npx playwright install`) as needed. Do not commit or change branches. "
+                   "`npx playwright install`) as needed. " + (GIT_ALLOWED if allow_git and full_access else GIT_STRICT) +
                    "Finish with a concise summary of what you changed and anything that "
                    "still blocks the task.")
     elif worker:
@@ -317,14 +323,15 @@ def command(provider, prompt, model=None, effort=None, worker=True, sandbox=Fals
 
 
 def continuing_worker_command(provider, prompt, model=None, effort=None,
-                              session=None, workspace=None, allow_subagents=False, full_access=False):
+                              session=None, workspace=None, allow_subagents=False, full_access=False,
+                              allow_git=False):
     """A worktree-scoped worker turn with provider conversation persistence.
 
     These resume flags are supported by the installed CLI versions. A failed
     resume is classified by the keeper and retried as a fresh handoff.
     """
     argv = command(provider, prompt, model, effort, scope="worktree", workspace=workspace,
-                   allow_subagents=allow_subagents, full_access=full_access)
+                   allow_subagents=allow_subagents, full_access=full_access, allow_git=allow_git)
     if provider == "codex":
         argv.remove("--ephemeral")
         if session:

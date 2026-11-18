@@ -129,6 +129,13 @@ class SuperviseTests(unittest.TestCase):
         spec=json.loads(self.fleet.manifest.read_text())
         return next(t for t in spec['tasks'] if t['id']==ident)['terminal_requested']
 
+    def test_allow_git_option_must_be_a_boolean(self):
+        spec={**self.spec,'tasks':[{**self.spec['tasks'][0],'options':{'allow_git':'yes'}}]}
+        with self.assertRaises(ValueError):
+            self.fleet.normalized(spec,self.source.parent)
+        spec['tasks'][0]['options']={'allow_git':True}
+        self.assertTrue(self.fleet.normalized(spec,self.source.parent)['tasks'][0]['options']['allow_git'])
+
     def test_cross_repo_option_must_be_a_boolean(self):
         spec={**self.spec,'tasks':[{**self.spec['tasks'][0],'options':{'cross_repo':'yes'}}]}
         with self.assertRaises(ValueError):
