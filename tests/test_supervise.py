@@ -120,6 +120,89 @@ class SuperviseTests(unittest.TestCase):
                 step.assert_called_once()
                 self.assertEqual(step.call_args.args[0].id,self.run_for('two').id)
 
+    def request_terminal(self, ident='one'):
+        spec=json.loads(self.fleet.manifest.read_text())
+        next(t for t in spec['tasks'] if t['id']==ident)['terminal_requested']=True
+        self.fleet.manifest.write_text(json.dumps(spec))
+
+    def requested(self, ident='one'):
+        spec=json.loads(self.fleet.manifest.read_text())
+        return next(t for t in spec['tasks'] if t['id']==ident)['terminal_requested']
+
+    def test_cross_repo_option_must_be_a_boolean(self):
+        spec={**self.spec,'tasks':[{**self.spec['tasks'][0],'options':{'cross_repo':'yes'}}]}
+        with self.assertRaises(ValueError):
+            self.fleet.normalized(spec,self.source.parent)
+        spec['tasks'][0]['options']={'cross_repo':True}
+        self.assertTrue(self.fleet.normalized(spec,self.source.parent)['tasks'][0]['options']['cross_repo'])
+
+    def test_message_takes_back_a_terminal_request_that_never_opened(self):
+        patcher=mock.patch('loop.supervise.HANDOFF_GRACE_SECONDS',0);patcher.start();self.addCleanup(patcher.stop)
+        self.request_terminal()
+        self.fleet.note('one','Please continue')
+        with mock.patch.object(SupervisedRun,'step',autospec=True) as step:
+            self.fleet.run(once=True)
+        self.assertFalse(self.requested())
+        self.assertIn(self.run_for('one').dir,[call.args[0].dir for call in step.call_args_list])
+        self.assertIn('terminal_request_withdrawn',self.run_for('one').path('journal.jsonl').read_text())
+
+    def test_a_just_requested_terminal_is_not_withdrawn_for_a_waiting_message(self):
+        self.request_terminal()
+        self.fleet.note('one','Please continue')
+        with mock.patch.object(SupervisedRun,'step',autospec=True):
+            self.fleet.run(once=True)
+        self.assertTrue(self.requested())
+
+    def test_message_leaves_an_open_terminal_alone(self):
+        self.request_terminal()
+        run=self.run_for('one')
+        state=run.state();state['interactive_session']={'id':'live'};run.save_state(state)
+        self.fleet.note('one','Please continue')
+        with mock.patch.object(SupervisedRun,'step',autospec=True) as step:
+            self.fleet.run(once=True)
+        self.assertTrue(self.requested())
+        self.assertNotIn(run.dir,[call.args[0].dir for call in step.call_args_list])
+
+    def leave_dead_terminal_record(self, run):
+        from loop.worker import terminal_owner_path
+        marker=terminal_owner_path(run.dir,run.worktree)
+        marker.parent.mkdir(parents=True,exist_ok=True)
+        marker.write_text('{}')
+        return marker
+
+    def test_message_clears_a_dead_terminals_record_when_nothing_runs_in_the_worktree(self):
+        patcher=mock.patch('loop.supervise.HANDOFF_GRACE_SECONDS',0);patcher.start();self.addCleanup(patcher.stop)
+        self.request_terminal()
+        run=self.run_for('one');self.leave_dead_terminal_record(run)
+        self.fleet.note('one','Please continue')
+        with mock.patch('loop.supervise.TmuxSession') as tmux, \
+                mock.patch('loop.supervise.worktree_has_processes',return_value=False), \
+                mock.patch.object(SupervisedRun,'step',autospec=True):
+            tmux.recover.return_value.alive.return_value=False
+            self.fleet.run(once=True)
+        tmux.recover.return_value.reconcile.assert_called_once_with(verified_no_writers=True)
+        self.assertFalse(self.requested())
+
+    def test_message_keeps_a_dead_terminals_record_while_a_process_runs_in_the_worktree(self):
+        patcher=mock.patch('loop.supervise.HANDOFF_GRACE_SECONDS',0);patcher.start();self.addCleanup(patcher.stop)
+        self.request_terminal()
+        run=self.run_for('one');marker=self.leave_dead_terminal_record(run)
+        self.fleet.note('one','Please continue')
+        with mock.patch('loop.supervise.TmuxSession') as tmux, \
+                mock.patch('loop.supervise.worktree_has_processes',return_value=True), \
+                mock.patch.object(SupervisedRun,'step',autospec=True):
+            tmux.recover.return_value.alive.return_value=False
+            self.fleet.run(once=True)
+        tmux.recover.return_value.reconcile.assert_not_called()
+        self.assertTrue(marker.exists())
+        self.assertTrue(self.requested())
+
+    def test_terminal_request_stays_without_a_waiting_message(self):
+        self.request_terminal()
+        with mock.patch.object(SupervisedRun,'step',autospec=True):
+            self.fleet.run(once=True)
+        self.assertTrue(self.requested())
+
     def run_for(self, ident='one'):
         return next(run for task, run in self.fleet.runs() if task['id'] == ident)
 

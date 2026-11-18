@@ -41,6 +41,14 @@ class ContinuousBase(unittest.TestCase):
 
 
 class ContinuousTests(ContinuousBase):
+    def test_cross_repo_work_is_announced_to_the_worker_only_when_allowed(self):
+        state = self.run.state()
+        self.assertNotIn("cross-repository", self.run._prompt(state))
+        config = self.run.load("config.json")
+        config["cross_repo"] = True
+        self.run.save("config.json", config)
+        self.assertIn("cross-repository work", self.run._prompt(state))
+
     def test_worker_effort_is_saved_in_each_attempt(self):
         for effort in (None, "high", "low"):
             with self.subTest(effort=effort):
