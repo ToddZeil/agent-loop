@@ -46,6 +46,21 @@ def read(path):
         return None
 
 
+def turn_activity(run_dir, state):
+    # Interactive turns report through the activity hooks; background turns only leave
+    # their logs, so a finished background turn counts from its newest log write.
+    activity = read(Path(run_dir) / 'activity.json') or {}
+    if state.get('attempt') or state.get('state') in ('working', 'verifying', 'commit_pending'):
+        return activity or {'state': 'working', 'at': 0}
+    try:
+        logged = max((p.stat().st_mtime for p in (Path(run_dir) / 'logs').iterdir()), default=0)
+    except OSError:
+        logged = 0
+    if logged > activity.get('at', 0):
+        return {'state': 'idle', 'at': logged}
+    return activity
+
+
 def list_prs(repository):
     out = subprocess.run(['gh', 'pr', 'list', '--repo', repository, '--author', '@me', '--state', 'all',
                           '--limit', '100', '--json', 'number,state,isDraft,url,headRefName'],

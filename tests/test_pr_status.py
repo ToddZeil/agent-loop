@@ -71,5 +71,16 @@ class PrStatusTest(unittest.TestCase):
         self.assertEqual(json.loads(self.path.read_text())['state'], 'DRAFT')
 
 
+    def test_finished_background_turn_counts_from_its_logs(self):
+        run = self.tmp / 'run'
+        (run / 'logs').mkdir(parents=True)
+        log = run / 'logs' / 'objective-1.jsonl'
+        log.write_text('x')
+        import os
+        os.utime(log, (900, 900))
+        self.assertEqual(pr_status.turn_activity(run, {'attempt': 'a', 'state': 'working'})['state'], 'working')
+        self.assertEqual(pr_status.turn_activity(run, {'attempt': None, 'state': 'complete'}), {'state': 'idle', 'at': 900})
+
+
 if __name__ == '__main__':
     unittest.main()

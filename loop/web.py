@@ -490,7 +490,7 @@ class Controller:
             if task.get('delete_requested') or not run.worktree.exists():
                 continue
             agents.append({'repo': task['repo'], 'worktree': run.worktree, 'path': run.dir / 'pr.json',
-                           'activity': pr_status.read(run.dir / 'activity.json')})
+                           'activity': pr_status.turn_activity(run.dir, run.state())})
         return agents
 
     async def watch_prs(self):
